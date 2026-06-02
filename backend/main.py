@@ -40,6 +40,30 @@ AI_ROUTE_URL = (
     os.getenv("AI_ROUTE_URL")
     or f"{AI_BASE_URL or 'http://localhost:8001'}/rank-routes"
 )
+AI_TIMEOUT = float(os.getenv("AI_TIMEOUT", "60"))
+
+FALLBACK_PENALTY_KEYWORDS = {
+    "취객": 0.5,
+    "술취": 0.5,
+    "폭행": 1.0,
+    "범죄": 1.0,
+    "칼부림": 1.5,
+    "바바리맨": 1.0,
+    "스토킹": 1.0,
+    "어두": 0.5,
+    "무서": 0.5,
+    "불안": 0.7,
+    "사람이 적": 0.5,
+}
+
+FALLBACK_BONUS_KEYWORDS = {
+    "깨끗": 0.5,
+    "안전": 0.7,
+    "좋아": 0.4,
+    "추천": 0.4,
+    "안심": 0.7,
+    "든든": 0.6,
+}
 
 app = FastAPI(title="HereJi Safety Map API")
 
@@ -65,20 +89,38 @@ def health_check():
     return {"status": "ok"}
 
 
+def clamp_ai_score(score):
+    return max(0.0, min(float(score), 5.0))
+
+
+def fallback_ai_score(text):
+    score = 3.0
+
+    for keyword, penalty in FALLBACK_PENALTY_KEYWORDS.items():
+        if keyword in text:
+            score -= penalty
+
+    for keyword, bonus in FALLBACK_BONUS_KEYWORDS.items():
+        if keyword in text:
+            score += bonus
+
+    return clamp_ai_score(score)
+
+
 def call_ai(text):
     try:
-        res = requests.post(AI_URL, json={"review": text}, timeout=3)
+        res = requests.post(AI_URL, json={"review": text}, timeout=AI_TIMEOUT)
         res.raise_for_status()
         data = res.json()
         if "ai_score" in data:
             ai_score = float(data.get("ai_score") or 0)
-            return max(0.0, min(ai_score, 5.0))
+            return clamp_ai_score(ai_score)
         danger_score = float(data.get("danger_score") or 0)
-        danger_score = max(0.0, min(danger_score, 5.0))
+        danger_score = clamp_ai_score(danger_score)
         return 5.0 - danger_score
     except Exception as e:
         logger.exception("AI review analysis failed: %s", e)
-        return 0
+        return fallback_ai_score(text)
 
 
 @app.post("/review")
