@@ -201,8 +201,8 @@ User
 ┃ ┗ requirements.txt
 ┣ 📁 ai
 ┃ ┣ .gitignore
-┃ ┣ main.py
 ┃ ┣ ai_scoring.py
+┃ ┣ main.py
 ┃ ┗ requirements.txt
 ┃ 📁 doc
 ┃ ┣ PMF_analysis.md
@@ -289,13 +289,13 @@ User
 `.gitignore`
 - 깃허브에 업로드하지 않을 파일 목록 관리
 
-`main.py`
-- FastAPI 기반 AI 분석 및 경로 랭킹 API 서버 메인 파일
-- 실시간 리뷰 감성 분석 및 평균 안심 점수 알고리즘 수행
-
 `ai_scoring.py`
-- AI 서버 인스턴스 연동 및 보조 스크립트
-- 메인 API 파이프라인의 수치 연산 및 구동 환경 지원
+- AI 점수 계산 관련 보조 파일
+- AI 서버 점수 계산 로직 및 보조 연산 분리 관리
+
+`main.py`
+- FastAPI 기반 AI 서버 메인 파일
+- 사용자 리뷰 기반 안전 점수 계산 및 구역별 점수 기반 최적 경로 순차 정렬
 
 `requirements.txt`
 - AI 서버 실행에 필요한 라이브러리 목록
