@@ -106,17 +106,16 @@ Google Maps 기반 지도 렌더링
 
 ```text
 User
-↓
-Frontend (React + Google Maps)
-↓
-Backend (FastAPI)
-↓
-Database (MySQL)
-↓
-AI Engine (OpenAI API)
-↓
+ ↓
+Frontend
+ ↓
+Backend
+ ├─ MySQL
+ └─ AI Server
+      └─ OpenAI API
+ ↓
 Response
-↓
+ ↓
 User
 ```
 
@@ -127,10 +126,11 @@ User
 | Layer | Stack |
 |---|---|
 | Frontend | React, JavaScript / HTML / CSS, Google Cloud Console |
-| Backend | FastAPI |
+| Backend | FastAPI, Python |
 | Database | MySQL |
+| Data Processing | CSV, Python Script |
 | AI | OpenAI API |
-
+| Deployment | Vercel, Render |
 ---
 
 ## Repository Structure
@@ -148,10 +148,18 @@ User
 ┃ ┣ package.json
 ┃ ┗ package-lock.json
 ┣ 📁 backend
+┃ ┣ 📁 data
+┃ ┃ ┣ police_hongdae_1km.csv
+┃ ┃ ┣ public_facilities_hongdae_1km.csv
+┃ ┃ ┗ sample_lamp.csv
+┃ ┣ 📁 scripts
+┃ ┃ ┣ geocode_addresses.py
+┃ ┃ ┗ import_public_safety_csv.py
 ┃ ┣ .gitignore
 ┃ ┣ db.py
 ┃ ┣ main.py
 ┃ ┣ schemas.py
+┃ ┣ .env.example
 ┃ ┗ requirements.txt
 ┣ 📁 ai
 ┃ ┣ .gitignore
@@ -199,26 +207,45 @@ User
 - 사용된 라이브러리 버전 정보 관리
 
 #### backend
+
 `.gitignore`
 - 깃허브에 업로드하지 않을 파일 목록 관리
 - venv, 캐시 파일, 환경변수 등 제외 설정
 
 `db.py`
 - MySQL 데이터베이스 연결 및 관리
-- 리뷰 데이터 저장 및 조회 기능 구현
+- zone_id 계산 및 격자 구역 생성
+- 리뷰 및 공공 안전 데이터 저장·조회
+- 최종 안전 점수 계산
 
 `main.py`
-- FastAPI 기반 백엔드 서버 실행 파일
-- API 엔드포인트 정의 및 요청 처리
-- AI 서버와 통신하여 위험도 계산
+- FastAPI 서버 실행 및 API 엔드포인트 관리
+- AI 서버 연동 및 리뷰 위험도 분석 요청
+- 리뷰 저장·조회 API 제공
+- 지도 시각화 및 경로 안전도 API 제공
+- 헬스체크 API 제공
 
 `schemas.py`
-- 요청/응답 데이터 구조 정의 (Pydantic)
-- 데이터 검증 및 타입 관리
+- 요청/응답 데이터 구조 정의
+- API 데이터 검증 및 타입 관리
+
+`.env.example`
+- 로컬 개발 환경을 위한 환경 변수 예시 파일
+- DB 연결 정보 및 API 주소 예시 제공
 
 `requirements.txt`
-- 프로젝트 실행에 필요한 라이브러리 목록
-- 동일한 개발 환경 재현을 위한 설정 파일
+- 백엔드 실행에 필요한 라이브러리 목록
+- 동일한 개발 환경 재현을 위한 의존성 관리 파일
+
+`data/`
+- 공공 안전 인프라 CSV 데이터 관리
+- CCTV, 편의점, 경찰 시설, 보안등 데이터 보관
+- 공공 안전 점수 계산을 위한 초기 적재 데이터 관리
+
+`scripts/`
+- 공공 안전 인프라 CSV 데이터 전처리 및 적재 스크립트 관리
+- 좌표 기반 시설 데이터를 격자 구역별 개수로 집계
+- 주소 기반 데이터를 위도/경도 좌표로 변환하는 보조 도구 관리
 
 #### ai
 `.gitignore`
