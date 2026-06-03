@@ -163,7 +163,7 @@ User
 
 | Layer | Stack |
 |---|---|
-| Frontend | React, JavaScript / HTML / CSS, Google Cloud Console |
+| Frontend | React, JavaScript / HTML / CSS, Google Cloud Console, T Map API |
 | Backend | FastAPI, Python |
 | Database | MySQL |
 | Data Processing | CSV, Python |
