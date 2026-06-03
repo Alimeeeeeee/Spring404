@@ -106,19 +106,16 @@ Google Maps 기반 지도 렌더링
 
 ```text
 User
-↓
-Frontend (React + Google Maps)
-↓
-Backend (FastAPI)
-↓
-Database (MySQL)
-↓
-Backend (FastAPI)
-↓
-AI Engine (OpenAI API)
-↓
+ ↓
+Frontend
+ ↓
+Backend
+ ├─ MySQL
+ └─ AI Server
+      └─ OpenAI API
+ ↓
 Response
-↓
+ ↓
 User
 ```
 
