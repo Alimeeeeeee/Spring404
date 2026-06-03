@@ -162,6 +162,7 @@ User
 ┃ ┣ db.py
 ┃ ┣ main.py
 ┃ ┣ schemas.py
+┃ ┣ .env.example
 ┃ ┗ requirements.txt
 ┣ 📁 ai
 ┃ ┣ .gitignore
