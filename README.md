@@ -154,8 +154,7 @@ User
 ┃ ┣ 📁 data
 ┃ ┃ ┣ police_hongdae_1km.csv
 ┃ ┃ ┣ public_facilities_hongdae_1km.csv
-┃ ┃ ┣ sample_lamp.csv
-┃ ┃ ┗ README.md
+┃ ┃ ┗ sample_lamp.csv
 ┃ ┣ 📁 scripts
 ┃ ┃ ┣ geocode_addresses.py
 ┃ ┃ ┗ import_public_safety_csv.py
