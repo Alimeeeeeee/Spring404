@@ -1,10 +1,40 @@
 from pydantic import BaseModel, ConfigDict, Field
 
+
+class SignupRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+    nickname: str = Field(min_length=1, max_length=50)
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class GenderVerificationRequest(BaseModel):
+    test_code: str = Field(min_length=1, max_length=100)
+
+
+class ReviewPhotoInput(BaseModel):
+    photo_data: str = Field(min_length=1)
+    photo_name: str | None = Field(default=None, max_length=255)
+
+
 class ReviewCreate(BaseModel):
-    content: str
+    content: str = Field(min_length=1, max_length=2000)
     lat: float
     lng: float
     user_score: int = Field(ge=0, le=5)
+    photos: list[ReviewPhotoInput] = Field(default_factory=list, max_length=5)
+    photo_data: str | None = None
+    photo_name: str | None = Field(default=None, max_length=255)
+
+
+class ReviewUpdate(BaseModel):
+    content: str | None = Field(default=None, min_length=1, max_length=2000)
+    user_score: int | None = Field(default=None, ge=0, le=5)
+    photos: list[ReviewPhotoInput] | None = Field(default=None, max_length=5)
 
 
 class PublicSafetyZoneCreate(BaseModel):
@@ -26,8 +56,7 @@ class RoutePoint(BaseModel):
 
 
 class RouteCandidate(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+    model_config = ConfigDict(extra='allow')
     id: str
     path: list[RoutePoint]
 

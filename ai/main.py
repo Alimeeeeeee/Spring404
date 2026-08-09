@@ -9,7 +9,8 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 load_dotenv()
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 app = FastAPI(title="HereJi AI Scoring API")
 
@@ -34,6 +35,8 @@ class RoutePoint(BaseModel):
 class RouteInput(BaseModel):
     id: str
     path: list[RoutePoint]
+    durationValue: float = 0
+    distanceValue: float = 0
 
 
 class ZoneInput(BaseModel):
@@ -43,6 +46,10 @@ class ZoneInput(BaseModel):
     min_lng: float
     max_lng: float
     final_safety_score: float
+    cctv_count: int = 0
+    lamp_count: int = 0
+    convenience_count: int = 0
+    police_count: int = 0
 
 
 class RouteRankInput(BaseModel):
@@ -62,6 +69,8 @@ def analyze_review_with_ai(review_text: str) -> float:
     )
 
     try:
+        if client is None:
+            raise RuntimeError("OPENAI_API_KEY is not configured")
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             response_format={"type": "json_object"},
@@ -129,6 +138,87 @@ def find_zone_id_for_point(point: RoutePoint, zones: list[ZoneInput]) -> int | N
     return None
 
 
+def build_fallback_explanation(route: dict, rank: int) -> dict:
+    min_score = route["minSafetyScore"]
+    average_score = route["averageSafetyScore"]
+    coverage = route["coverageRatio"]
+
+    if coverage < 0.5:
+        return {
+            "summary": "안전 데이터가 부족해 참고용으로만 확인해 주세요.",
+            "reason": (
+                f"전체 경로의 {coverage * 100:.0f}%만 안전 데이터로 분석되어 "
+                "다른 후보와 정확히 비교하기 어렵습니다."
+            ),
+        }
+
+    if rank == 1:
+        summary = "가장 취약한 구간의 안전점수가 높은 경로예요."
+        reason = (
+            f"후보 중 위험 구간을 우선 비교한 결과, 최저 안전점수 {min_score:.2f}점과 "
+            f"평균 {average_score:.2f}점으로 가장 안정적인 경로입니다."
+        )
+    else:
+        summary = "일부 구간의 안전점수가 더 낮은 대안 경로예요."
+        reason = (
+            f"최저 안전점수는 {min_score:.2f}점, 평균은 {average_score:.2f}점이며 "
+            "안전 취약 구간을 기준으로 추천 순위가 결정됐습니다."
+        )
+
+    return {"summary": summary, "reason": reason}
+
+
+def generate_route_explanations(ranked_routes: list[dict]) -> dict[str, dict]:
+    fallback = {
+        route["id"]: build_fallback_explanation(route, index + 1)
+        for index, route in enumerate(ranked_routes)
+    }
+    if client is None or not ranked_routes:
+        return fallback
+
+    facts = [
+        {
+            "id": route["id"],
+            "rank": index + 1,
+            "min_safety_score": route["minSafetyScore"],
+            "average_safety_score": route["averageSafetyScore"],
+            "coverage_percent": round(route["coverageRatio"] * 100),
+            "low_score_zone_count": route["lowScoreZoneCount"],
+            "facility_counts": route["facilityCounts"],
+        }
+        for index, route in enumerate(ranked_routes)
+    ]
+    instruction = (
+        "You explain route-ranking results for a Korean safety map. Ranking is already fixed by "
+        "the deterministic min-score algorithm; never change it. Return only JSON with an "
+        "'explanations' array. Each item must contain id, summary, and reason. Write Korean. "
+        "Summary must be one short sentence. Reason must be one concrete sentence using only the "
+        "provided facts. Do not claim that safety is guaranteed and do not invent crime or facility data."
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=os.getenv("OPENAI_ROUTE_EXPLANATION_MODEL", "gpt-4o-mini"),
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": instruction},
+                {"role": "user", "content": json.dumps(facts, ensure_ascii=False)},
+            ],
+            temperature=0.2,
+        )
+        result = json.loads(response.choices[0].message.content)
+        for item in result.get("explanations", []):
+            route_id = item.get("id")
+            summary = str(item.get("summary") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            if route_id in fallback and summary and reason:
+                fallback[route_id] = {"summary": summary, "reason": reason}
+    except Exception as e:
+        print(f"OpenAI route explanation failed, using templates: {e}")
+
+    return fallback
+
+
 @app.post("/rank-routes")
 async def rank_routes(payload: RouteRankInput):
     zone_scores = {
@@ -147,22 +237,49 @@ async def rank_routes(payload: RouteRankInput):
                 seen_zone_ids.add(zone_id)
                 zone_ids.append(zone_id)
 
-        total_score = sum(zone_scores.get(zone_id, 0.0) for zone_id in zone_ids)
-        average_score = total_score / len(zone_ids) if zone_ids else 0.0
+        scores = [zone_scores[zone_id] for zone_id in zone_ids if zone_id in zone_scores]
+        total_score = sum(scores)
+        average_score = total_score / len(scores) if scores else 0.0
+        min_score = min(scores) if scores else 0.0
+        matched_point_count = sum(
+            1 for point in route.path if find_zone_id_for_point(point, payload.zones) is not None
+        )
+        coverage_ratio = matched_point_count / len(route.path) if route.path else 0.0
+        route_zones = [zone for zone in payload.zones if zone.zone_id in seen_zone_ids]
 
         ranked_routes.append(
             {
                 "id": route.id,
                 "zoneIds": zone_ids,
                 "totalSafetyScore": round(total_score, 2),
-                "safetyScore": round(average_score, 2),
+                "averageSafetyScore": round(average_score, 2),
+                "minSafetyScore": round(min_score, 2),
+                "safetyScore": round(min_score, 2),
+                "coverageRatio": round(coverage_ratio, 3),
+                "lowScoreZoneCount": sum(score < 2.5 for score in scores),
+                "facilityCounts": {
+                    "cctv": sum(zone.cctv_count for zone in route_zones),
+                    "lamp": sum(zone.lamp_count for zone in route_zones),
+                    "convenience": sum(zone.convenience_count for zone in route_zones),
+                    "police": sum(zone.police_count for zone in route_zones),
+                },
+                "durationValue": route.durationValue,
+                "distanceValue": route.distanceValue,
             }
         )
 
     ranked_routes.sort(
-        key=lambda route: (route["safetyScore"], route["totalSafetyScore"]),
+        key=lambda route: (
+            route["minSafetyScore"],
+            route["averageSafetyScore"],
+            -route["durationValue"],
+            -route["distanceValue"],
+        ),
         reverse=True,
     )
+    explanations = generate_route_explanations(ranked_routes)
+    for route in ranked_routes:
+        route.update(explanations[route["id"]])
     return {"routes": ranked_routes}
 
 

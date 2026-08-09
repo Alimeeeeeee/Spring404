@@ -49,7 +49,7 @@ export function SearchPanel({
       <div
         style={{
           position: 'absolute',
-          top: 12,
+          top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
           left: 12,
           right: 12,
           zIndex: 30,
@@ -100,8 +100,10 @@ export function SearchPanel({
             inset: 0,
             zIndex: 25,
             backgroundColor: '#f8fafc',
-            padding: '72px 14px 20px',
+            padding:
+              'calc(env(safe-area-inset-top, 0px) + 72px) 14px calc(env(safe-area-inset-bottom, 0px) + 20px)',
             overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch',
           }}
         >
           <div
@@ -363,7 +365,7 @@ export function MyLocationButton({ moveToMyLocation, locationLoading, sheetHeigh
       style={{
         position: 'absolute',
         right: 14,
-        bottom: sheetHeight + 16,
+        bottom: `calc(${sheetHeight + 16}px + env(safe-area-inset-bottom, 0px))`,
         zIndex: 22,
         width: 44,
         height: 44,
@@ -441,14 +443,32 @@ export function BottomSheet({
   setPointAsStart,
   setPointAsEnd,
   reviews,
+  reviewSort,
+  changeReviewSort,
+  likeReview,
+  reportReview,
+  deleteReview,
+  startEditReview,
+  currentUserId,
+  currentUser,
+  onLogout,
   displayedSafetyScore,
   safetyScoreLoading,
   reviewRating,
   setReviewRating,
   reviewText,
   setReviewText,
+  reviewPhotos,
+  selectReviewPhotos,
+  removeReviewPhoto,
+  editingReviewId,
+  cancelEditReview,
   saveReview,
 }) {
+  const reviewPhotoData = reviewPhotos[0]?.photo_data || '';
+  const reviewPhotoName = reviewPhotos[0]?.photo_name || '';
+  const selectReviewPhoto = (file) => selectReviewPhotos(file ? [file] : []);
+
   return (
     <>
       {safetyScoreLoading && (
@@ -485,6 +505,10 @@ export function BottomSheet({
           </div>
         </div>
       )}
+      <div style={{ position: 'fixed', top: 12, right: 12, zIndex: 45, display: 'flex', gap: 7, alignItems: 'center', padding: '7px 9px', borderRadius: 999, background: 'rgba(255,255,255,.95)', boxShadow: '0 4px 16px rgba(0,0,0,.12)', fontSize: 12, fontWeight: 800 }}>
+        <span>{currentUser?.nickname}</span>
+        <button type="button" onClick={onLogout} style={{ border: 0, borderRadius: 999, padding: '5px 8px', fontWeight: 800 }}>로그아웃</button>
+      </div>
 
       <div
       style={{
@@ -498,8 +522,11 @@ export function BottomSheet({
         borderTopLeftRadius: 22,
         borderTopRightRadius: 22,
         boxShadow: '0 -10px 30px rgba(15, 23, 42, 0.2)',
-        padding: '10px 16px 18px',
+        padding:
+          '10px 16px calc(env(safe-area-inset-bottom, 0px) + 18px)',
         overflowY: 'auto',
+        WebkitOverflowScrolling: 'touch',
+        touchAction: 'pan-y',
       }}
     >
       <div
@@ -584,7 +611,7 @@ export function BottomSheet({
                   marginBottom: 8,
                 }}
               >
-                {idx === 0 ? '최적 추천 · ' : ''}
+                {idx === 0 ? 'Min Score 추천 · ' : ''}
                 {route.name}
               </div>
 
@@ -600,14 +627,25 @@ export function BottomSheet({
 
               <div
                 style={{
-                  color: getSafetyColor(Number(route.safetyScore || 0)),
+                  color: getSafetyColor(Number(route.minSafetyScore || 0)),
                   fontWeight: 900,
                   fontSize: 14,
                 }}
               >
-                안전 점수 {route.safetyScore} / 5 · 주변 리뷰{' '}
-                {route.nearReviews.length}개
+                최저 {Number(route.minSafetyScore || 0).toFixed(2)} / 5 · 평균{' '}
+                {Number(route.averageSafetyScore || 0).toFixed(2)} / 5
               </div>
+              <div style={{ marginTop: 9, color: '#111827', fontSize: 13, fontWeight: 900 }}>
+                {route.summary || '경로의 가장 취약한 구간을 우선 비교했습니다.'}
+              </div>
+              <div style={{ marginTop: 5, color: '#64748b', fontSize: 12, lineHeight: 1.5 }}>
+                {route.reason || '최저 안전점수가 높은 순서로 추천하며, 동점이면 평균 점수와 소요 시간을 비교합니다.'}
+              </div>
+              {Number(route.coverageRatio || 0) < 0.5 && (
+                <div style={{ marginTop: 7, color: '#b45309', fontSize: 11, fontWeight: 800 }}>
+                  안전 데이터 포함률이 낮아 결과를 참고용으로 확인해 주세요.
+                </div>
+              )}
             </button>
           ))}
         </>
@@ -658,8 +696,7 @@ export function BottomSheet({
             }}
           >
             <div style={{ minWidth: 0 }}>
-              <div
-                style={{
+              <div style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
@@ -791,6 +828,37 @@ export function BottomSheet({
             리뷰
           </div>
 
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              gap: 14,
+              marginBottom: 10,
+            }}
+          >
+            {[
+              { key: 'latest', label: '최신순' },
+              { key: 'helpful', label: '추천순' },
+            ].map((item) => (
+              <button
+                key={item.key}
+                onClick={() => changeReviewSort(item.key)}
+                style={{
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  color: reviewSort === item.key ? '#111827' : '#9ca3af',
+                  fontWeight: reviewSort === item.key ? 900 : 700,
+                  fontSize: 15,
+                  padding: '2px 0',
+                  cursor: 'pointer',
+                }}
+              >
+                · {item.label}
+              </button>
+            ))}
+          </div>
+
           {reviews.length === 0 && (
             <div
               style={{
@@ -825,6 +893,150 @@ export function BottomSheet({
               <div style={{ color: '#374151', fontSize: 14, textAlign: 'center' }}>
                 {review.content}
               </div>
+              {false && review.photo_data && (
+                <img
+                  src={review.photo_data}
+                  alt={review.photo_name || '리뷰 사진'}
+                  style={{
+                    width: '100%',
+                    maxHeight: 180,
+                    objectFit: 'cover',
+                    borderRadius: 10,
+                    marginTop: 10,
+                    border: '1px solid #e5e7eb',
+                  }}
+                />
+              )}
+              {(review.photos?.length > 0 || review.photo_data) && (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 10,
+                    overflowX: 'auto',
+                    marginTop: 10,
+                    paddingBottom: 4,
+                    scrollSnapType: 'x mandatory',
+                    WebkitOverflowScrolling: 'touch',
+                  }}
+                >
+                  {(review.photos?.length
+                    ? review.photos
+                    : [{ photo_data: review.photo_data, photo_name: review.photo_name }]
+                  ).map((photo, photoIndex) => (
+                    <img
+                      key={`${review.id}-photo-${photoIndex}`}
+                      src={photo.photo_data}
+                      alt={photo.photo_name || '리뷰 사진'}
+                      style={{
+                        width: 132,
+                        height: 132,
+                        objectFit: 'cover',
+                        borderRadius: 12,
+                        border: '1px solid #e5e7eb',
+                        flex: '0 0 auto',
+                        scrollSnapAlign: 'start',
+                        backgroundColor: '#f3f4f6',
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+              {review.report_status === 'under_review' && (
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    minHeight: 24,
+                    marginTop: 8,
+                    padding: '0 9px',
+                    borderRadius: 999,
+                    backgroundColor: '#fef3c7',
+                    color: '#92400e',
+                    fontWeight: 900,
+                    fontSize: 11,
+                  }}
+                >
+                  신고 검토중
+                </div>
+              )}
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  gap: 6,
+                  marginTop: 8,
+                }}
+              >
+                <button
+                  onClick={() => likeReview(review.id)}
+                  style={{
+                    minWidth: 82,
+                    height: 30,
+                    border: '1px solid #d1fae5',
+                    borderRadius: 999,
+                    backgroundColor: '#ecfdf5',
+                    color: '#047857',
+                    fontWeight: 900,
+                    fontSize: 0,
+                  }}
+                >
+                  <span style={{ fontSize: 12 }}>👍 좋아요 {review.like_count || 0}</span>
+                  좋아요 {review.like_count || 0}
+                </button>
+                <button
+                  onClick={() => reportReview(review.id)}
+                  style={{
+                    minWidth: 58,
+                    height: 30,
+                    border: '1px solid #fee2e2',
+                    borderRadius: 999,
+                    backgroundColor: '#fff7ed',
+                    color: '#b91c1c',
+                    fontWeight: 900,
+                    fontSize: 0,
+                  }}
+                >
+                  <span style={{ fontSize: 12 }}>🚩 신고</span>
+                  신고
+                </button>
+                {Number(review.user_id) === Number(currentUserId) && (
+                  <>
+                    <button
+                      onClick={() => startEditReview(review)}
+                      style={{
+                        minWidth: 58,
+                        height: 30,
+                        border: '1px solid #bfdbfe',
+                        borderRadius: 999,
+                        backgroundColor: '#eff6ff',
+                        color: '#1d4ed8',
+                        fontWeight: 900,
+                        fontSize: 0,
+                      }}
+                    >
+                      <span style={{ fontSize: 12 }}>✏️ 수정</span>
+                      수정
+                    </button>
+                    <button
+                      onClick={() => deleteReview(review.id)}
+                      style={{
+                        minWidth: 58,
+                        height: 30,
+                        border: '1px solid #e5e7eb',
+                        borderRadius: 999,
+                        backgroundColor: '#f9fafb',
+                        color: '#374151',
+                        fontWeight: 900,
+                        fontSize: 0,
+                      }}
+                    >
+                      <span style={{ fontSize: 12 }}>🗑️ 삭제</span>
+                      삭제
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           ))}
 
@@ -835,6 +1047,38 @@ export function BottomSheet({
               marginTop: 12,
             }}
           >
+            {editingReviewId && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  marginBottom: 8,
+                  padding: '8px 10px',
+                  borderRadius: 10,
+                  backgroundColor: '#eff6ff',
+                  color: '#1d4ed8',
+                  fontSize: 12,
+                  fontWeight: 900,
+                }}
+              >
+                <span>리뷰 수정 중</span>
+                <button
+                  onClick={cancelEditReview}
+                  style={{
+                    border: 'none',
+                    borderRadius: 999,
+                    backgroundColor: '#dbeafe',
+                    color: '#1d4ed8',
+                    fontWeight: 900,
+                    padding: '5px 9px',
+                  }}
+                >
+                  취소
+                </button>
+              </div>
+            )}
             <div style={{ marginBottom: 8, textAlign: 'center' }}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <span
@@ -870,6 +1114,146 @@ export function BottomSheet({
               }}
             />
 
+            {reviewPhotoData && (
+              <div
+                style={{
+                  marginTop: 8,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 12,
+                  overflow: 'hidden',
+                  backgroundColor: '#f9fafb',
+                }}
+              >
+                <img
+                  src={reviewPhotoData}
+                  alt={reviewPhotoName || '첨부 사진'}
+                  style={{
+                    width: '100%',
+                    maxHeight: 170,
+                    objectFit: 'cover',
+                    display: 'block',
+                  }}
+                />
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: 9,
+                    fontSize: 12,
+                    color: '#4b5563',
+                    fontWeight: 800,
+                  }}
+                >
+                  <span
+                    style={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {reviewPhotoName || '첨부 사진'}
+                  </span>
+                  <button
+                    onClick={() => removeReviewPhoto(0)}
+                    style={{
+                      border: 'none',
+                      borderRadius: 999,
+                      backgroundColor: '#fee2e2',
+                      color: '#b91c1c',
+                      fontWeight: 900,
+                      padding: '6px 9px',
+                      flex: '0 0 auto',
+                    }}
+                  >
+                    삭제
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {reviewPhotos.length > 1 && (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  overflowX: 'auto',
+                  marginTop: 8,
+                  paddingBottom: 2,
+                }}
+              >
+                {reviewPhotos.slice(1).map((photo, index) => (
+                  <div
+                    key={`selected-photo-${index}`}
+                    style={{
+                      position: 'relative',
+                      width: 96,
+                      height: 76,
+                      flex: '0 0 auto',
+                    }}
+                  >
+                    <img
+                      src={photo.photo_data}
+                      alt={photo.photo_name || '첨부 사진'}
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'cover',
+                        borderRadius: 10,
+                        border: '1px solid #e5e7eb',
+                      }}
+                    />
+                    <button
+                      onClick={() => removeReviewPhoto(index + 1)}
+                      style={{
+                        position: 'absolute',
+                        top: 5,
+                        right: 5,
+                        width: 24,
+                        height: 24,
+                        border: 'none',
+                        borderRadius: 999,
+                        backgroundColor: 'rgba(185, 28, 28, 0.92)',
+                        color: '#ffffff',
+                        fontWeight: 900,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: 38,
+                marginTop: 8,
+                border: '1px dashed #9ca3af',
+                borderRadius: 12,
+                backgroundColor: '#f9fafb',
+                color: '#374151',
+                fontWeight: 900,
+                fontSize: 13,
+              }}
+            >
+              사진 첨부
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(e) => {
+                  selectReviewPhotos(e.target.files);
+                  e.target.value = '';
+                }}
+                style={{ display: 'none' }}
+              />
+            </label>
+
             <button
               onClick={saveReview}
               style={{
@@ -883,7 +1267,7 @@ export function BottomSheet({
                 fontWeight: 900,
               }}
             >
-              리뷰 저장
+              {editingReviewId ? '리뷰 수정 완료' : '리뷰 저장'}
             </button>
           </div>
         </>
