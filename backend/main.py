@@ -2,7 +2,7 @@ import logging
 import os
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 try:
@@ -15,15 +15,20 @@ except ImportError:
 from db import (
     calculate_safety_score,
     calculate_zone_id,
+    delete_review,
     get_map_zones,
     get_public_safety_zone,
     get_public_safety_zones,
     get_reviews,
     init_tables,
+    like_review,
+    report_review,
     save_review,
+    update_review,
     upsert_public_safety_zone,
 )
-from schemas import PublicSafetyZoneCreate, ReviewCreate, RouteSafetyRequest
+from auth import login_user, logout_token, require_user, require_verified_user, signup_user, verify_gender
+from schemas import GenderVerificationRequest, LoginRequest, PublicSafetyZoneCreate, ReviewCreate, ReviewUpdate, RouteSafetyRequest, SignupRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -69,7 +74,7 @@ app = FastAPI(title="HereJi Safety Map API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -87,6 +92,35 @@ def startup():
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.post("/auth/signup")
+def signup(payload: SignupRequest):
+    return {"user": signup_user(payload.email, payload.password, payload.nickname)}
+
+
+@app.post("/auth/login")
+def login(payload: LoginRequest):
+    token, user = login_user(payload.email, payload.password)
+    return {"access_token": token, "token_type": "bearer", "user": user}
+
+
+@app.get("/auth/me")
+def me(user=Depends(require_user)):
+    return {"user": user}
+
+
+@app.post("/auth/verify-gender")
+def gender_verification(payload: GenderVerificationRequest, user=Depends(require_user)):
+    verify_gender(user["id"], payload.test_code)
+    user["gender_verified"] = True
+    return {"user": user}
+
+
+@app.post("/auth/logout")
+def logout(authorization: str | None = Header(default=None)):
+    logout_token(authorization)
+    return {"message": "logged out"}
 
 
 def clamp_ai_score(score):
@@ -124,11 +158,11 @@ def call_ai(text):
 
 
 @app.post("/review")
-def create_review(review: ReviewCreate):
+def create_review(review: ReviewCreate, user=Depends(require_verified_user)):
     ai_score = call_ai(review.content)
 
     try:
-        zone_id = save_review(review, ai_score)
+        zone_id, review_id = save_review(review, ai_score, user["id"])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -141,6 +175,8 @@ def create_review(review: ReviewCreate):
         "message": "saved",
         "data": {
             "content": review.content,
+            "id": review_id,
+            "user_id": user["id"],
             "zone_id": zone_id,
             "lat": review.lat,
             "lng": review.lng,
@@ -185,30 +221,58 @@ def rank_routes_locally(routes, zones):
                 seen_zone_ids.add(zone_id)
                 zone_ids.append(zone_id)
 
-        total_score = sum(zone_scores.get(zone_id, 0.0) for zone_id in zone_ids)
-        average_score = total_score / len(zone_ids) if zone_ids else 0.0
+        scores = [zone_scores[zone_id] for zone_id in zone_ids if zone_id in zone_scores]
+        total_score = sum(scores)
+        average_score = total_score / len(scores) if scores else 0.0
+        min_score = min(scores) if scores else 0.0
+        matched_point_count = sum(
+            1 for point in route.get("path", []) if find_zone_id_for_point(point, zones) is not None
+        )
+        path_length = len(route.get("path", []))
+        coverage_ratio = matched_point_count / path_length if path_length else 0.0
+
+        if coverage_ratio < 0.5:
+            summary = "안전 데이터가 부족해 참고용으로만 확인해 주세요."
+            reason = (
+                f"전체 경로의 {coverage_ratio * 100:.0f}%만 안전 데이터로 분석되어 "
+                "다른 후보와 정확히 비교하기 어렵습니다."
+            )
+        else:
+            summary = "가장 취약한 구간의 점수를 기준으로 비교한 경로예요."
+            reason = (
+                f"최저 안전점수 {min_score:.2f}점과 평균 {average_score:.2f}점을 "
+                "기준으로 안전 취약 구간을 우선 비교했습니다."
+            )
 
         ranked.append(
             {
                 **route,
                 "zoneIds": zone_ids,
                 "totalSafetyScore": round(total_score, 2),
-                "safetyScore": round(average_score, 2),
+                "averageSafetyScore": round(average_score, 2),
+                "minSafetyScore": round(min_score, 2),
+                "safetyScore": round(min_score, 2),
+                "coverageRatio": round(coverage_ratio, 3),
+                "lowScoreZoneCount": sum(score < 2.5 for score in scores),
+                "summary": summary,
+                "reason": reason,
             }
         )
 
     return sorted(
         ranked,
         key=lambda route: (
-            route.get("safetyScore") or 0,
-            route.get("totalSafetyScore") or 0,
+            route.get("minSafetyScore") or 0,
+            route.get("averageSafetyScore") or 0,
+            -(route.get("durationValue") or 0),
+            -(route.get("distanceValue") or 0),
         ),
         reverse=True,
     )
 
 
 @app.post("/routes/safety-rank")
-def rank_routes_by_safety(payload: RouteSafetyRequest):
+def rank_routes_by_safety(payload: RouteSafetyRequest, _user=Depends(require_verified_user)):
     try:
         zones = get_map_zones()
         routes = [route.model_dump() for route in payload.routes]
@@ -217,7 +281,15 @@ def rank_routes_by_safety(payload: RouteSafetyRequest):
         raise HTTPException(status_code=500, detail="Failed to prepare route safety data")
 
     ai_payload = {
-        "routes": [{"id": route["id"], "path": route["path"]} for route in routes],
+        "routes": [
+            {
+                "id": route["id"],
+                "path": route["path"],
+                "durationValue": route.get("durationValue") or 0,
+                "distanceValue": route.get("distanceValue") or 0,
+            }
+            for route in routes
+        ],
         "zones": [
             {
                 "zone_id": zone["zone_id"],
@@ -226,6 +298,10 @@ def rank_routes_by_safety(payload: RouteSafetyRequest):
                 "min_lng": zone["min_lng"],
                 "max_lng": zone["max_lng"],
                 "final_safety_score": zone["final_safety_score"],
+                "cctv_count": zone.get("cctv_count") or 0,
+                "lamp_count": zone.get("lamp_count") or 0,
+                "convenience_count": zone.get("convenience_count") or 0,
+                "police_count": zone.get("police_count") or 0,
             }
             for zone in zones
         ],
@@ -257,12 +333,48 @@ def rank_routes_by_safety(payload: RouteSafetyRequest):
 
 
 @app.get("/reviews")
-def read_reviews():
+def read_reviews(sort: str = "latest", _user=Depends(require_verified_user)):
     try:
-        return get_reviews()
+        return get_reviews(sort)
     except Exception as e:
         logger.exception("Failed to read reviews: %s", e)
         raise HTTPException(status_code=500, detail="Failed to read reviews")
+
+
+@app.patch("/reviews/{review_id}")
+def edit_review(review_id: int, payload: ReviewUpdate, user=Depends(require_verified_user)):
+    try:
+        update_review(review_id, payload, user["id"], call_ai(payload.content) if payload.content is not None else None)
+        return {"message": "updated"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@app.delete("/reviews/{review_id}")
+def remove_review(review_id: int, user=Depends(require_verified_user)):
+    try:
+        delete_review(review_id, user["id"])
+        return {"message": "deleted"}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@app.post("/reviews/{review_id}/like")
+def like(review_id: int, user=Depends(require_verified_user)):
+    try:
+        return {"like_count": like_review(review_id, user["id"])}
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/reviews/{review_id}/report")
+def report(review_id: int, user=Depends(require_verified_user)):
+    try:
+        return report_review(review_id, user["id"])
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/zones/by-location")

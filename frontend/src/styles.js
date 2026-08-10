@@ -149,3 +149,4 @@ export const targetDotStyle = {
   backgroundColor: '#4b5563',
   transform: 'translate(-50%, -50%)',
 };
+

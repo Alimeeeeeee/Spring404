@@ -25,3 +25,4 @@ requests
 python-dotenv
 cryptography
 openpyxl
+

@@ -1,5 +1,5 @@
-export const API_URL = import.meta.env.VITE_API_URL || 'http://10.240.190.46:8000';
-export const TMAP_APP_KEY = 'nuyqPazzHgQQvPLshJ7H8VukJqO9JDlEn2TqFMb0';
+export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+export const TMAP_APP_KEY = import.meta.env.VITE_TMAP_APP_KEY || '';
 
 export const LIBRARIES = ['places', 'geometry'];
 
@@ -16,7 +16,7 @@ export const mapStyle = {
 export const NEAR_ROUTE_DISTANCE_METER = 120;
 export const HOME_SHEET_HEIGHT = 120;
 export const PLACE_SHEET_HEIGHT = 300;
-export const ROUTE_SHEET_HEIGHT = 360;
+export const ROUTE_SHEET_HEIGHT = 520;
 
 const koreaBounds = {
   minLat: 33,

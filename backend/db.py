@@ -150,6 +150,37 @@ def init_tables():
             cursor.execute(safety_zone_sql)
             cursor.execute(review_sql)
             cursor.execute(public_safety_zone_sql)
+            from auth import init_auth_tables
+            init_auth_tables(cursor)
+            review_columns = {
+                "user_id": "INT NULL",
+                "like_count": "INT NOT NULL DEFAULT 0",
+                "report_count": "INT NOT NULL DEFAULT 0",
+                "report_status": "VARCHAR(30) NOT NULL DEFAULT 'normal'",
+                "updated_at": "DATETIME NULL",
+                "deleted_at": "DATETIME NULL",
+            }
+            for column_name, definition in review_columns.items():
+                cursor.execute(
+                    """SELECT COUNT(*) AS column_count FROM information_schema.COLUMNS
+                       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='review' AND COLUMN_NAME=%s""",
+                    (column_name,),
+                )
+                if cursor.fetchone()["column_count"] == 0:
+                    cursor.execute(f"ALTER TABLE review ADD COLUMN {column_name} {definition}")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS review_photo (
+                id INT AUTO_INCREMENT PRIMARY KEY, review_id INT NOT NULL,
+                photo_data LONGTEXT NOT NULL, photo_name VARCHAR(255) NULL,
+                sort_order INT NOT NULL DEFAULT 0, INDEX idx_photo_review (review_id),
+                FOREIGN KEY (review_id) REFERENCES review(id) ON DELETE CASCADE)""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS review_like (
+                review_id INT NOT NULL, user_id INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (review_id,user_id))""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS review_report (
+                review_id INT NOT NULL, user_id INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (review_id,user_id))""")
             cursor.execute(
                 """
                 SELECT COUNT(*) AS column_count
@@ -235,14 +266,40 @@ def init_tables():
             )
 
 
-def save_review(review, ai_score):
+def _review_photos(review):
+    photos = [photo.model_dump() for photo in review.photos]
+    if not photos and getattr(review, "photo_data", None):
+        photos = [{"photo_data": review.photo_data, "photo_name": review.photo_name}]
+    return photos
+
+
+def _validate_photos(photos):
+    if len(photos) > 5:
+        raise ValueError("사진은 최대 5장까지 첨부할 수 있습니다.")
+    for photo in photos:
+        data = photo.get("photo_data") or ""
+        if not data.startswith("data:image/"):
+            raise ValueError("이미지 파일만 첨부할 수 있습니다.")
+        if len(data) > 2_000_000:
+            raise ValueError("사진 한 장은 1.5MB 이하로 줄여 주세요.")
+
+
+def _insert_photos(cursor, review_id, photos):
+    _validate_photos(photos)
+    cursor.executemany(
+        "INSERT INTO review_photo (review_id,photo_data,photo_name,sort_order) VALUES (%s,%s,%s,%s)",
+        [(review_id, p["photo_data"], p.get("photo_name"), i) for i, p in enumerate(photos)],
+    ) if photos else None
+
+
+def save_review(review, ai_score, user_id):
     zone_id = calculate_zone_id(review.lat, review.lng)
     if zone_id is None:
         raise ValueError("Review location is outside the Hongdae safety map area")
 
     sql = """
-    INSERT INTO review (content, zone_id, lat, lng, user_score, ai_score)
-    VALUES (%s, %s, %s, %s, %s, %s)
+    INSERT INTO review (content, zone_id, lat, lng, user_score, ai_score, user_id)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
@@ -254,18 +311,93 @@ def save_review(review, ai_score):
                     review.lat,
                     review.lng,
                     review.user_score,
-                    ai_score,
+                    ai_score, user_id,
                 ),
             )
-    return zone_id
+            review_id = cursor.lastrowid
+            _insert_photos(cursor, review_id, _review_photos(review))
+    return zone_id, review_id
 
 
-def get_reviews():
-    sql = "SELECT content, zone_id, lat, lng, user_score, ai_score FROM review"
+def get_reviews(sort="latest"):
+    order = "like_count DESC, created_at DESC" if sort == "helpful" else "created_at DESC"
+    sql = f"""SELECT id,content,zone_id,lat,lng,user_score,ai_score,user_id,
+        like_count,report_count,report_status,created_at,updated_at
+        FROM review WHERE deleted_at IS NULL ORDER BY {order}"""
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(sql)
-            return cursor.fetchall()
+            rows = cursor.fetchall()
+            if rows:
+                ids = [row["id"] for row in rows]
+                placeholders = ",".join(["%s"] * len(ids))
+                cursor.execute(f"SELECT review_id,photo_data,photo_name FROM review_photo WHERE review_id IN ({placeholders}) ORDER BY sort_order", ids)
+                photos = {}
+                for photo in cursor.fetchall():
+                    photos.setdefault(photo["review_id"], []).append({"photo_data": photo["photo_data"], "photo_name": photo["photo_name"]})
+                for row in rows:
+                    row["photos"] = photos.get(row["id"], [])
+            return rows
+
+
+def update_review(review_id, review, user_id, ai_score=None):
+    fields, values = [], []
+    if review.content is not None:
+        fields += ["content=%s", "ai_score=%s"]
+        values += [review.content, ai_score]
+    if review.user_score is not None:
+        fields.append("user_score=%s")
+        values.append(review.user_score)
+    if not fields and review.photos is None:
+        raise ValueError("수정할 내용이 없습니다.")
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            if fields:
+                values += [review_id, user_id]
+                cursor.execute(f"UPDATE review SET {','.join(fields)},updated_at=UTC_TIMESTAMP() WHERE id=%s AND user_id=%s AND deleted_at IS NULL", values)
+                if cursor.rowcount == 0:
+                    raise PermissionError("본인이 작성한 리뷰만 수정할 수 있습니다.")
+            if review.photos is not None:
+                cursor.execute("SELECT id FROM review WHERE id=%s AND user_id=%s AND deleted_at IS NULL", (review_id,user_id))
+                if not cursor.fetchone():
+                    raise PermissionError("본인이 작성한 리뷰만 수정할 수 있습니다.")
+                cursor.execute("DELETE FROM review_photo WHERE review_id=%s", (review_id,))
+                _insert_photos(cursor, review_id, [p.model_dump() for p in review.photos])
+
+
+def delete_review(review_id, user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE review SET deleted_at=UTC_TIMESTAMP() WHERE id=%s AND user_id=%s AND deleted_at IS NULL", (review_id,user_id))
+            if cursor.rowcount == 0:
+                raise PermissionError("본인이 작성한 리뷰만 삭제할 수 있습니다.")
+
+
+def like_review(review_id, user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM review WHERE id=%s AND deleted_at IS NULL", (review_id,))
+            if not cursor.fetchone():
+                raise LookupError("리뷰를 찾을 수 없습니다.")
+            cursor.execute("INSERT IGNORE INTO review_like (review_id,user_id) VALUES (%s,%s)", (review_id,user_id))
+            if cursor.rowcount:
+                cursor.execute("UPDATE review SET like_count=like_count+1 WHERE id=%s", (review_id,))
+            cursor.execute("SELECT like_count FROM review WHERE id=%s", (review_id,))
+            return cursor.fetchone()["like_count"]
+
+
+def report_review(review_id, user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM review WHERE id=%s AND deleted_at IS NULL", (review_id,))
+            if not cursor.fetchone():
+                raise LookupError("리뷰를 찾을 수 없습니다.")
+            cursor.execute("INSERT IGNORE INTO review_report (review_id,user_id) VALUES (%s,%s)", (review_id,user_id))
+            if cursor.rowcount:
+                cursor.execute("""UPDATE review SET report_count=report_count+1,
+                    report_status=IF(report_count+1>=3,'under_review','normal') WHERE id=%s""", (review_id,))
+            cursor.execute("SELECT report_count,report_status FROM review WHERE id=%s", (review_id,))
+            return cursor.fetchone()
 
 
 def upsert_public_safety_zone(zone):
@@ -355,7 +487,7 @@ def get_review_score_average(zone_id):
     sql = """
     SELECT AVG((user_score + ai_score) / 2) AS review_safety_score
     FROM review
-    WHERE zone_id = %s
+    WHERE zone_id = %s AND deleted_at IS NULL
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
@@ -416,7 +548,7 @@ def get_map_zones():
         AVG((r.user_score + r.ai_score) / 2) AS review_safety_score
     FROM safety_zone sz
     LEFT JOIN public_safety_zone psz ON sz.zone_id = psz.zone_id
-    LEFT JOIN review r ON sz.zone_id = r.zone_id
+    LEFT JOIN review r ON sz.zone_id = r.zone_id AND r.deleted_at IS NULL
     GROUP BY
         sz.zone_id,
         sz.row_index,

@@ -1,0 +1,112 @@
+import base64
+import hashlib
+import hmac
+import os
+import secrets
+from datetime import datetime, timedelta, timezone
+
+from fastapi import Depends, Header, HTTPException
+
+from db import get_connection
+
+PBKDF2_ITERATIONS = 310_000
+SESSION_HOURS = int(os.getenv('SESSION_HOURS', '168'))
+GENDER_TEST_CODE = os.getenv('GENDER_TEST_CODE', 'HEREJI404')
+
+
+def _hash_password(password: str, salt: bytes | None = None) -> str:
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, PBKDF2_ITERATIONS)
+    return f'pbkdf2_sha256${PBKDF2_ITERATIONS}${base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}'
+
+
+def _verify_password(password: str, encoded: str) -> bool:
+    try:
+        algorithm, iterations, salt, expected = encoded.split('$', 3)
+        if algorithm != 'pbkdf2_sha256':
+            return False
+        actual = hashlib.pbkdf2_hmac('sha256', password.encode(), base64.b64decode(salt), int(iterations))
+        return hmac.compare_digest(actual, base64.b64decode(expected))
+    except (ValueError, TypeError):
+        return False
+
+
+def init_auth_tables(cursor):
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(255) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL, nickname VARCHAR(50) NOT NULL,
+        gender_verified BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS auth_session (
+        token_hash CHAR(64) PRIMARY KEY, user_id INT NOT NULL,
+        expires_at DATETIME NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_session_user (user_id), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)''')
+
+
+def public_user(row):
+    return {'id': row['id'], 'email': row['email'], 'nickname': row['nickname'], 'gender_verified': bool(row['gender_verified'])}
+
+
+def signup_user(email, password, nickname):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('SELECT id FROM users WHERE email=%s', (email.lower().strip(),))
+            if cursor.fetchone():
+                raise HTTPException(409, detail='이미 가입된 이메일입니다.')
+            cursor.execute('INSERT INTO users (email,password_hash,nickname) VALUES (%s,%s,%s)', (email.lower().strip(), _hash_password(password), nickname.strip()))
+            user_id = cursor.lastrowid
+            cursor.execute('SELECT * FROM users WHERE id=%s', (user_id,))
+            return public_user(cursor.fetchone())
+
+
+def login_user(email, password):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('SELECT * FROM users WHERE email=%s', (email.lower().strip(),))
+            row = cursor.fetchone()
+            if not row or not _verify_password(password, row['password_hash']):
+                raise HTTPException(401, detail='이메일 또는 비밀번호가 올바르지 않습니다.')
+            token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
+            expires = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=SESSION_HOURS)
+            cursor.execute('INSERT INTO auth_session (token_hash,user_id,expires_at) VALUES (%s,%s,%s)', (token_hash, row['id'], expires))
+            return token, public_user(row)
+
+
+def _token(authorization: str | None):
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(401, detail='로그인이 필요합니다.')
+    return authorization[7:]
+
+
+def require_user(authorization: str | None = Header(default=None)):
+    token = _token(authorization)
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('''SELECT u.* FROM auth_session s JOIN users u ON u.id=s.user_id
+                WHERE s.token_hash=%s AND s.expires_at>UTC_TIMESTAMP()''', (hashlib.sha256(token.encode()).hexdigest(),))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(401, detail='세션이 만료되었습니다.')
+            return public_user(row)
+
+
+def require_verified_user(user=Depends(require_user)):
+    if not user['gender_verified']:
+        raise HTTPException(403, detail='인증을 완료해 주세요.')
+    return user
+
+
+def verify_gender(user_id, test_code):
+    if not hmac.compare_digest(test_code.strip(), GENDER_TEST_CODE):
+        raise HTTPException(400, detail='인증 코드가 올바르지 않습니다.')
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('UPDATE users SET gender_verified=TRUE WHERE id=%s', (user_id,))
+
+
+def logout_token(authorization):
+    token = _token(authorization)
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('DELETE FROM auth_session WHERE token_hash=%s', (hashlib.sha256(token.encode()).hexdigest(),))
