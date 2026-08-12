@@ -283,23 +283,6 @@ export default function AdminPage({ onBackToMap, onOpenReportedReview }) {
             <em>{counts.pending || 0}</em>
           </button>
 
-          <button type="button" className="admin-menu-card is-disabled" disabled>
-            <span className="admin-menu-icon">U</span>
-            <span>
-              <strong>회원 관리</strong>
-              <small>추후 회원 상태, 권한, 제재 내역 관리 기능 추가 예정</small>
-            </span>
-            <em>준비중</em>
-          </button>
-
-          <button type="button" className="admin-menu-card is-disabled" disabled>
-            <span className="admin-menu-icon">S</span>
-            <span>
-              <strong>서비스 설정</strong>
-              <small>운영 정책과 신고 기준 설정 기능 추가 예정</small>
-            </span>
-            <em>준비중</em>
-          </button>
         </section>
       </main>
     );

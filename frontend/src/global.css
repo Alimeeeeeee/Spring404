@@ -578,16 +578,6 @@ button {
   font-weight: 950;
 }
 
-.admin-menu-card.is-disabled {
-  cursor: default;
-  opacity: 0.62;
-}
-
-.admin-menu-card.is-disabled em {
-  background: #f3f4f6;
-  color: #6b7280;
-}
-
 .admin-menu-icon {
   width: 42px;
   height: 42px;
@@ -597,11 +587,6 @@ button {
   background: #14532d;
   color: #ffffff;
   font-weight: 950;
-}
-
-.admin-menu-card.is-disabled .admin-menu-icon {
-  background: #e5e7eb;
-  color: #4b5563;
 }
 
 .admin-toolbar {
