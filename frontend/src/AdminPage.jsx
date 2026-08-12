@@ -53,6 +53,7 @@ const Stars = ({ score }) => {
 };
 
 export default function AdminPage({ onBackToMap, onOpenReportedReview }) {
+  const [view, setView] = useState('home');
   const [status, setStatus] = useState('pending');
   const [reports, setReports] = useState([]);
   const [counts, setCounts] = useState({ pending: 0, resolved: 0, rejected: 0 });
@@ -91,8 +92,27 @@ export default function AdminPage({ onBackToMap, onOpenReportedReview }) {
   };
 
   useEffect(() => {
-    loadReports(status);
-  }, [status]);
+    loadCounts().catch((err) => setMessage(err.message));
+  }, []);
+
+  useEffect(() => {
+    if (view === 'reports') {
+      loadReports(status);
+    }
+  }, [view, status]);
+
+  const openReports = () => {
+    setView('reports');
+    setSelectedReport(null);
+    setActionReport(null);
+  };
+
+  const backToAdminHome = () => {
+    setView('home');
+    setSelectedReport(null);
+    setActionReport(null);
+    setMessage('');
+  };
 
   const finishAction = async (callback) => {
     if (!actionReport && !selectedReport) return;
@@ -103,6 +123,7 @@ export default function AdminPage({ onBackToMap, onOpenReportedReview }) {
       setActionReport(null);
       setSelectedReport(null);
       await loadReports(status);
+      await loadCounts();
     } catch (err) {
       setMessage(err.message);
     }
@@ -232,13 +253,48 @@ export default function AdminPage({ onBackToMap, onOpenReportedReview }) {
     );
   }
 
+  if (view === 'home') {
+    return (
+      <main className="admin-page">
+        <header className="admin-header">
+          <button type="button" onClick={onBackToMap} className="admin-icon-button">
+            ←
+          </button>
+          <strong>관리자 페이지</strong>
+          <div className="admin-bell" aria-label="신규 신고">
+            {counts.pending > 0 && <span>{counts.pending}</span>}
+          </div>
+        </header>
+
+        {message && <div className="admin-message">{message}</div>}
+
+        <section className="admin-home">
+          <div className="admin-home-summary">
+            <strong>관리자 기능</strong>
+            <p>서비스 운영에 필요한 기능을 선택해서 관리하세요.</p>
+          </div>
+
+          <button type="button" className="admin-menu-card" onClick={openReports}>
+            <span className="admin-menu-icon">!</span>
+            <span>
+              <strong>리뷰 신고 관리</strong>
+              <small>신고된 리뷰를 확인하고 숨김, 기각, 검토 완료 처리</small>
+            </span>
+            <em>{counts.pending || 0}</em>
+          </button>
+
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="admin-page">
       <header className="admin-header">
-        <button type="button" onClick={onBackToMap} className="admin-icon-button">
-          ☰
+        <button type="button" onClick={backToAdminHome} className="admin-icon-button">
+          ←
         </button>
-        <strong>리뷰 관리</strong>
+        <strong>리뷰 신고 관리</strong>
         <div className="admin-bell" aria-label="신규 신고">
           {counts.pending > 0 && <span>{counts.pending}</span>}
         </div>
@@ -284,7 +340,7 @@ export default function AdminPage({ onBackToMap, onOpenReportedReview }) {
               <h2>{report.content || '내용 없는 리뷰'}</h2>
               <p>{report.reason || '-'}</p>
               <div className="admin-card-meta">
-                <span>♙</span>
+                <span>신고자</span>
                 <span>{report.reporter_nickname || report.reporter_email || '-'}</span>
                 <i />
                 <span>{shortDate(report.reported_at)}</span>
@@ -322,7 +378,7 @@ function ActionSheet({ report, onClose, onHide, onReject, onResolve, onRestore }
       <section className="admin-action-sheet" onClick={(event) => event.stopPropagation()}>
         <header>
           <strong>처리하기</strong>
-          <button type="button" onClick={onClose}>×</button>
+          <button type="button" onClick={onClose}>x</button>
         </header>
         <p>처리할 항목을 선택해주세요</p>
 
@@ -334,14 +390,14 @@ function ActionSheet({ report, onClose, onHide, onReject, onResolve, onRestore }
           </button>
         ) : (
           <button type="button" className="admin-action-option is-danger" onClick={onHide}>
-            <span>⊘</span>
+            <span>!</span>
             <strong>리뷰 숨김 처리</strong>
             <small>리뷰를 임시로 숨기고 확인 후 최종 조치합니다.</small>
           </button>
         )}
 
         <button type="button" className="admin-action-option" onClick={onReject}>
-          <span>⚐</span>
+          <span>F</span>
           <strong>신고 기각</strong>
           <small>신고 내용이 타당하지 않다고 판단되는 경우 선택합니다.</small>
         </button>

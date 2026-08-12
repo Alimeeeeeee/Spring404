@@ -504,6 +504,91 @@ button {
   padding: 18px 16px calc(env(safe-area-inset-bottom, 0px) + 24px);
 }
 
+.admin-home {
+  display: grid;
+  gap: 12px;
+  padding: 18px 16px calc(env(safe-area-inset-bottom, 0px) + 28px);
+}
+
+.admin-home-summary {
+  padding: 18px 16px;
+  border: 1px solid #d1fae5;
+  border-radius: 14px;
+  background: #ecfdf5;
+}
+
+.admin-home-summary strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #14532d;
+  font-size: 18px;
+  font-weight: 950;
+}
+
+.admin-home-summary p {
+  margin: 0;
+  color: #4b5563;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.admin-menu-card {
+  display: grid;
+  grid-template-columns: 42px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 86px;
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #ffffff;
+  color: #111827;
+  text-align: left;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  cursor: pointer;
+}
+
+.admin-menu-card strong {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.admin-menu-card small {
+  display: block;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.admin-menu-card em {
+  min-width: 34px;
+  min-height: 28px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #fee2e2;
+  color: #dc2626;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+}
+
+.admin-menu-icon {
+  width: 42px;
+  height: 42px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 12px;
+  background: #14532d;
+  color: #ffffff;
+  font-weight: 950;
+}
+
 .admin-toolbar {
   display: flex;
   justify-content: space-between;
