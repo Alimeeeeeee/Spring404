@@ -17,8 +17,24 @@ import {
 } from './mapHelpers';
 import { BottomSheet, MapView, MyLocationButton, SearchPanel } from './AppViews';
 import { authFetch } from './authApi';
+import AdminPage from './AdminPage';
+import MyPage from './MyPage';
 
-function SafetyMap({ user, onLogout }) {
+const REPORT_REASONS = [
+  { label: '허위·사실과 다른 정보', description: '실제 장소 상황과 다른 내용이라고 판단되는 경우' },
+  { label: '방문하지 않고 작성한 것으로 의심되는 리뷰', description: '실제 경험 없이 작성한 것으로 보이는 경우' },
+  { label: '광고·홍보성 내용', description: '업체 홍보, 스팸 등이 포함된 경우' },
+  { label: '안전과 관련 없는 내용', description: '장소의 안전성과 무관한 내용만 작성된 경우' },
+  { label: '욕설·비방·혐오 표현', description: '타인이나 특정 집단을 공격하는 내용이 포함된 경우' },
+  { label: '개인정보 노출', description: '이름, 연락처, 얼굴 등 타인의 개인정보가 포함된 경우' },
+  { label: '중복·도배 리뷰', description: '동일하거나 유사한 내용을 반복해서 작성한 경우' },
+  { label: '부적절한 사진', description: '장소와 관계없거나 부적절한 이미지가 첨부된 경우' },
+  { label: '기타', description: '직접 신고 사유 입력' },
+];
+
+function SafetyMap({ user, onUserChange, onLogout }) {
+  const [screen, setScreen] = useState('map');
+  const [menuOpen, setMenuOpen] = useState(false);
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '',
     libraries: LIBRARIES,
@@ -34,6 +50,10 @@ function SafetyMap({ user, onLogout }) {
   const [editingReviewId, setEditingReviewId] = useState(null);
   const [reviews, setReviews] = useState([]);
   const [reviewSort, setReviewSort] = useState('latest');
+  const [reportTargetId, setReportTargetId] = useState(null);
+  const [reportReason, setReportReason] = useState('');
+  const [reportDetail, setReportDetail] = useState('');
+  const [reportSubmitting, setReportSubmitting] = useState(false);
 
   const [startPoint, setStartPoint] = useState(null);
   const [endPoint, setEndPoint] = useState(null);
@@ -646,6 +666,47 @@ function SafetyMap({ user, onLogout }) {
     }
   };
 
+  const openReportedReviewFromAdmin = async (report) => {
+    if (report?.lat == null || report?.lng == null) return;
+
+    const position = {
+      lat: Number(report.lat),
+      lng: Number(report.lng),
+    };
+
+    setScreen('map');
+    setMenuOpen(false);
+
+    await openPlaceDetail({
+      id: `reported-review-${report.review_id}`,
+      name: '신고된 리뷰 위치',
+      address: '',
+      position,
+    });
+
+    const reportedReview = {
+      id: report.review_id,
+      content: report.content,
+      zone_id: report.zone_id,
+      lat: report.lat,
+      lng: report.lng,
+      user_score: Number(report.user_score || 0),
+      ai_score: Number(report.ai_score || 0),
+      like_count: 0,
+      report_count: Number(report.report_count || 0),
+      report_status: report.report_status,
+      moderation_status: report.moderation_status,
+      photos: report.photos || [],
+      is_admin_focus: true,
+    };
+
+    setReviews((prev) => [
+      reportedReview,
+      ...prev.filter((review) => Number(review.id) !== Number(report.review_id)),
+    ]);
+    setSheetHeight(PLACE_SHEET_HEIGHT);
+  };
+
   const changeReviewSort = async (sort) => {
     setReviewSort(sort);
 
@@ -700,6 +761,28 @@ function SafetyMap({ user, onLogout }) {
 
   const reportReview = async (reviewId) => {
     if (!reviewId) return;
+    setReportTargetId(reviewId);
+    setReportReason('');
+    setReportDetail('');
+  };
+
+  const closeReportDialog = () => {
+    if (reportSubmitting) return;
+    setReportTargetId(null);
+    setReportReason('');
+    setReportDetail('');
+  };
+
+  const submitReport = async () => {
+    if (!reportTargetId) return;
+    if (!reportReason) {
+      alert('신고 사유를 선택해 주세요.');
+      return;
+    }
+    if (reportReason === '기타' && !reportDetail.trim()) {
+      alert('기타 신고 사유를 입력해 주세요.');
+      return;
+    }
 
     if (!window.confirm('이 리뷰를 신고하시겠습니까?')) return;
 
@@ -729,6 +812,55 @@ function SafetyMap({ user, onLogout }) {
     } catch (err) {
       console.error(err);
       alert('신고 처리에 실패했습니다.');
+    }
+  };
+
+  const submitReportWithReason = async () => {
+    if (!reportTargetId) return;
+    if (!reportReason) {
+      alert('신고 사유를 선택해 주세요.');
+      return;
+    }
+    if (reportReason === '기타' && !reportDetail.trim()) {
+      alert('기타 신고 사유를 입력해 주세요.');
+      return;
+    }
+
+    setReportSubmitting(true);
+    try {
+      const res = await authFetch(`${API_URL}/reviews/${reportTargetId}/report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reason: reportReason,
+          detail: reportDetail.trim() || null,
+        }),
+      });
+
+      if (!res.ok) throw new Error('review report failed');
+
+      const reportedReview = await res.json();
+      setReviews((prev) =>
+        prev.map((review) =>
+          review.id === reportTargetId
+            ? {
+                ...review,
+                report_count: reportedReview.report_count,
+                report_status: reportedReview.report_status,
+              }
+            : review,
+        ),
+      );
+
+      setReportTargetId(null);
+      setReportReason('');
+      setReportDetail('');
+      alert('신고가 접수되었습니다.');
+    } catch (err) {
+      console.error(err);
+      alert('신고 처리에 실패했습니다.');
+    } finally {
+      setReportSubmitting(false);
     }
   };
 
@@ -797,8 +929,7 @@ function SafetyMap({ user, onLogout }) {
 
     try {
       const resizedPhoto = await resizeReviewPhoto(file);
-      setReviewPhotoData(resizedPhoto);
-      setReviewPhotoName(file.name);
+      setReviewPhotos([{ photo_data: resizedPhoto, photo_name: file.name }]);
     } catch (err) {
       console.error(err);
       alert('사진을 불러오지 못했습니다.');
@@ -806,8 +937,7 @@ function SafetyMap({ user, onLogout }) {
   };
 
   const removeReviewPhoto = () => {
-    setReviewPhotoData('');
-    setReviewPhotoName('');
+    setReviewPhotos([]);
   };
 
   const selectReviewPhotos = async (files) => {
@@ -992,7 +1122,20 @@ function SafetyMap({ user, onLogout }) {
         if (!res.ok) throw new Error('리뷰 수정 실패');
 
         await res.json();
-        setReviews(await fetchAllReviews(reviewSort));
+        setReviews((prev) =>
+          prev.map((review) =>
+            Number(review.id) === Number(editingReviewId)
+              ? {
+                  ...review,
+                  content: reviewText,
+                  user_score: reviewRating,
+                  photo_data: firstPhoto.photo_data || null,
+                  photo_name: firstPhoto.photo_name || null,
+                  photos: reviewPhotos,
+                }
+              : review,
+          ),
+        );
         setReviewText('');
         setReviewRating(0);
         setReviewPhotos([]);
@@ -1072,6 +1215,26 @@ function SafetyMap({ user, onLogout }) {
     return <div style={{ padding: 20 }}>Loading...</div>;
   }
 
+  if (screen === 'mypage') {
+    return (
+      <MyPage
+        user={user}
+        onUserChange={onUserChange}
+        onBackToMap={() => setScreen('map')}
+        onLogout={onLogout}
+      />
+    );
+  }
+
+  if (screen === 'admin') {
+    return (
+      <AdminPage
+        onBackToMap={() => setScreen('map')}
+        onOpenReportedReview={openReportedReviewFromAdmin}
+      />
+    );
+  }
+
   return (
     <div
       style={{
@@ -1111,7 +1274,281 @@ function SafetyMap({ user, onLogout }) {
           searchError={searchError}
           searchResults={searchResults}
           openPlaceDetail={openPlaceDetail}
+          onOpenMenu={() => setMenuOpen(true)}
         />
+
+        {menuOpen && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 80,
+              backgroundColor: 'rgba(15, 23, 42, 0.28)',
+            }}
+            onClick={() => setMenuOpen(false)}
+          >
+            <aside
+              style={{
+                width: 'min(292px, 78%)',
+                height: '100%',
+                backgroundColor: '#ffffff',
+                boxShadow: '16px 0 32px rgba(15, 23, 42, 0.22)',
+                padding:
+                  'calc(env(safe-area-inset-top, 0px) + 18px) 16px calc(env(safe-area-inset-bottom, 0px) + 18px)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 14,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 10,
+                  marginBottom: 4,
+                }}
+              >
+                <strong style={{ color: '#14532d', fontSize: 20 }}>여기지!</strong>
+                <button
+                  type="button"
+                  onClick={() => setMenuOpen(false)}
+                  aria-label="메뉴 닫기"
+                  style={{
+                    width: 34,
+                    height: 34,
+                    border: 'none',
+                    borderRadius: 10,
+                    backgroundColor: '#f3f4f6',
+                    color: '#374151',
+                    fontSize: 20,
+                    fontWeight: 900,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div
+                style={{
+                  padding: 12,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 14,
+                  backgroundColor: '#f8fafc',
+                }}
+              >
+                <div style={{ fontSize: 13, color: '#64748b', fontWeight: 800 }}>
+                  로그인 계정
+                </div>
+                <div style={{ marginTop: 4, color: '#111827', fontWeight: 900 }}>
+                  {user.nickname}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setScreen('mypage');
+                }}
+                style={{
+                  width: '100%',
+                  height: 46,
+                  border: '2px solid #14532d',
+                  borderRadius: 12,
+                  backgroundColor: '#ffffff',
+                  color: '#14532d',
+                  fontSize: 15,
+                  fontWeight: 900,
+                  textAlign: 'left',
+                  padding: '0 14px',
+                }}
+              >
+                마이페이지
+              </button>
+
+              {user.role === 'admin' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setScreen('admin');
+                  }}
+                  style={{
+                    width: '100%',
+                    height: 46,
+                    border: '2px solid #b91c1c',
+                    borderRadius: 12,
+                    backgroundColor: '#fff7ed',
+                    color: '#b91c1c',
+                    fontSize: 15,
+                    fontWeight: 900,
+                    textAlign: 'left',
+                    padding: '0 14px',
+                  }}
+                >
+                  관리자 페이지
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={onLogout}
+                style={{
+                  width: '100%',
+                  height: 44,
+                  marginTop: 'auto',
+                  border: 'none',
+                  borderRadius: 12,
+                  backgroundColor: '#f3f4f6',
+                  color: '#374151',
+                  fontSize: 14,
+                  fontWeight: 900,
+                }}
+              >
+                로그아웃
+              </button>
+            </aside>
+          </div>
+        )}
+
+        {reportTargetId && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 90,
+              display: 'flex',
+              alignItems: 'flex-end',
+              justifyContent: 'center',
+              backgroundColor: 'rgba(15, 23, 42, 0.35)',
+              padding: '16px 14px calc(env(safe-area-inset-bottom, 0px) + 16px)',
+            }}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-label="리뷰 신고"
+              style={{
+                width: '100%',
+                maxHeight: '78dvh',
+                overflowY: 'auto',
+                backgroundColor: '#ffffff',
+                borderRadius: 18,
+                padding: 16,
+                boxShadow: '0 18px 45px rgba(15, 23, 42, 0.28)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  marginBottom: 12,
+                }}
+              >
+                <strong style={{ fontSize: 18, color: '#111827' }}>리뷰 신고</strong>
+                <button
+                  type="button"
+                  onClick={closeReportDialog}
+                  disabled={reportSubmitting}
+                  style={{
+                    width: 34,
+                    height: 34,
+                    border: 'none',
+                    borderRadius: 10,
+                    backgroundColor: '#f3f4f6',
+                    color: '#374151',
+                    fontSize: 20,
+                    fontWeight: 900,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <p style={{ margin: '0 0 12px', color: '#64748b', fontSize: 13, lineHeight: 1.45 }}>
+                신고 사유를 선택하면 관리자 검토 내역으로 저장됩니다.
+              </p>
+
+              <div style={{ display: 'grid', gap: 8 }}>
+                {REPORT_REASONS.map((reason) => (
+                  <label
+                    key={reason.label}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 9,
+                      padding: '10px 11px',
+                      border: `1px solid ${reportReason === reason.label ? '#14532d' : '#e5e7eb'}`,
+                      borderRadius: 12,
+                      backgroundColor: reportReason === reason.label ? '#ecfdf5' : '#ffffff',
+                      color: '#111827',
+                      fontSize: 13,
+                      fontWeight: 800,
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="reportReason"
+                      value={reason.label}
+                      checked={reportReason === reason.label}
+                      onChange={() => setReportReason(reason.label)}
+                      style={{ marginTop: 2 }}
+                    />
+                    <span>
+                      <span style={{ display: 'block' }}>{reason.label}</span>
+                      <span style={{ display: 'block', marginTop: 3, color: '#64748b', fontSize: 12, fontWeight: 700 }}>
+                        {reason.description}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {reportReason === '기타' && (
+                <textarea
+                  value={reportDetail}
+                  onChange={(e) => setReportDetail(e.target.value)}
+                  placeholder="신고 사유를 직접 입력해 주세요"
+                  style={{
+                    width: '100%',
+                    minHeight: 84,
+                    marginTop: 10,
+                    border: '1px solid #d1d5db',
+                    borderRadius: 12,
+                    padding: 11,
+                    resize: 'none',
+                    outline: 'none',
+                    fontFamily: 'inherit',
+                    fontSize: 13,
+                  }}
+                />
+              )}
+
+              <button
+                type="button"
+                onClick={submitReportWithReason}
+                disabled={reportSubmitting}
+                style={{
+                  width: '100%',
+                  height: 44,
+                  marginTop: 12,
+                  border: 'none',
+                  borderRadius: 12,
+                  backgroundColor: '#14532d',
+                  color: '#ffffff',
+                  fontWeight: 900,
+                }}
+              >
+                {reportSubmitting ? '접수 중...' : '신고 접수'}
+              </button>
+            </section>
+          </div>
+        )}
 
         <MapView
           setMap={setMap}
@@ -1155,6 +1592,7 @@ function SafetyMap({ user, onLogout }) {
           startEditReview={startEditReview}
           currentUserId={user.id}
           currentUser={user}
+          onOpenMyPage={() => setScreen('mypage')}
           onLogout={onLogout}
           displayedSafetyScore={getDisplayedSafetyScore()}
           safetyScoreLoading={safetyScoreLoading}

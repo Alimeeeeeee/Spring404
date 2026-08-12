@@ -43,6 +43,7 @@ export function SearchPanel({
   searchError,
   searchResults,
   openPlaceDetail,
+  onOpenMenu,
 }) {
   return (
     <>
@@ -57,6 +58,39 @@ export function SearchPanel({
           gap: 8,
         }}
       >
+        <button
+          type="button"
+          onClick={onOpenMenu}
+          aria-label="메뉴 열기"
+          style={{
+            width: 44,
+            height: 44,
+            border: 'none',
+            borderRadius: 14,
+            backgroundColor: '#ffffff',
+            color: '#14532d',
+            boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: 0,
+            flex: '0 0 auto',
+          }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              width: 18,
+              height: 14,
+              display: 'grid',
+              gap: 4,
+            }}
+          >
+            <span style={{ height: 2, backgroundColor: '#14532d', borderRadius: 999 }} />
+            <span style={{ height: 2, backgroundColor: '#14532d', borderRadius: 999 }} />
+            <span style={{ height: 2, backgroundColor: '#14532d', borderRadius: 999 }} />
+          </span>
+        </button>
+
         <input
           value={searchText}
           onFocus={() => setSearchScreenOpen(true)}
@@ -451,6 +485,7 @@ export function BottomSheet({
   startEditReview,
   currentUserId,
   currentUser,
+  onOpenMyPage,
   onLogout,
   displayedSafetyScore,
   safetyScoreLoading,
@@ -467,8 +502,6 @@ export function BottomSheet({
 }) {
   const reviewPhotoData = reviewPhotos[0]?.photo_data || '';
   const reviewPhotoName = reviewPhotos[0]?.photo_name || '';
-  const selectReviewPhoto = (file) => selectReviewPhotos(file ? [file] : []);
-
   return (
     <>
       {safetyScoreLoading && (
@@ -505,10 +538,13 @@ export function BottomSheet({
           </div>
         </div>
       )}
+      {false && (
       <div style={{ position: 'fixed', top: 12, right: 12, zIndex: 45, display: 'flex', gap: 7, alignItems: 'center', padding: '7px 9px', borderRadius: 999, background: 'rgba(255,255,255,.95)', boxShadow: '0 4px 16px rgba(0,0,0,.12)', fontSize: 12, fontWeight: 800 }}>
         <span>{currentUser?.nickname}</span>
+        <button type="button" onClick={onOpenMyPage} style={{ border: 0, borderRadius: 999, padding: '5px 8px', fontWeight: 800, background: '#ecfdf5', color: '#047857' }}>마이페이지</button>
         <button type="button" onClick={onLogout} style={{ border: 0, borderRadius: 999, padding: '5px 8px', fontWeight: 800 }}>로그아웃</button>
       </div>
+      )}
 
       <div
       style={{
@@ -683,6 +719,26 @@ export function BottomSheet({
           >
             내 주변 장소를 눌러 안전 점수와 리뷰를 확인해보세요
           </div>
+          <button
+            type="button"
+            onClick={onOpenMyPage}
+            style={{
+              display: 'none',
+              width: 'min(340px, 94%)',
+              height: 42,
+              marginTop: 14,
+              border: '2px solid #14532d',
+              borderRadius: 12,
+              backgroundColor: '#ffffff',
+              color: '#14532d',
+              fontSize: 0,
+              fontWeight: 900,
+              boxShadow: '0 6px 14px rgba(15, 23, 42, 0.1)',
+            }}
+          >
+            마이페이지
+            <span style={{ fontSize: 15 }}>마이페이지</span>
+          </button>
         </div>
       ) : (
         <>
@@ -893,6 +949,33 @@ export function BottomSheet({
               <div style={{ color: '#374151', fontSize: 14, textAlign: 'center' }}>
                 {review.content}
               </div>
+              {review.is_admin_focus && (
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    minHeight: 24,
+                    marginTop: 8,
+                    padding: '0 9px',
+                    borderRadius: 999,
+                    backgroundColor: '#fee2e2',
+                    color: '#b91c1c',
+                    fontWeight: 900,
+                    fontSize: 0,
+                  }}
+                >
+                  <span style={{ fontSize: 11 }}>
+                    {review.report_status === 'under_review'
+                      ? '\uc2e0\uace0 \uac80\ud1a0\uc911'
+                      : '\uc2e0\uace0 \uc811\uc218'}
+                  </span>
+                  <span style={{ display: 'none' }}>
+                    {review.report_status === 'under_review' ? '신고 검토중' : '신고 접수'}
+                  </span>
+                  신고 리뷰
+                </div>
+              )}
               {false && review.photo_data && (
                 <img
                   src={review.photo_data}
@@ -941,7 +1024,7 @@ export function BottomSheet({
                   ))}
                 </div>
               )}
-              {review.report_status === 'under_review' && (
+              {['reported', 'under_review'].includes(review.report_status) && (
                 <div
                   style={{
                     display: 'inline-flex',
@@ -951,12 +1034,16 @@ export function BottomSheet({
                     marginTop: 8,
                     padding: '0 9px',
                     borderRadius: 999,
-                    backgroundColor: '#fef3c7',
-                    color: '#92400e',
+                    backgroundColor:
+                      review.report_status === 'under_review' ? '#fef3c7' : '#eff6ff',
+                    color: review.report_status === 'under_review' ? '#92400e' : '#1d4ed8',
                     fontWeight: 900,
-                    fontSize: 11,
+                    fontSize: 0,
                   }}
                 >
+                  <span style={{ fontSize: 11 }}>
+                    {review.report_status === 'under_review' ? '신고 검토중' : '신고 접수'}
+                  </span>
                   신고 검토중
                 </div>
               )}

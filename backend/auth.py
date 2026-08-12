@@ -14,6 +14,14 @@ SESSION_HOURS = int(os.getenv('SESSION_HOURS', '168'))
 GENDER_TEST_CODE = os.getenv('GENDER_TEST_CODE', 'HEREJI404')
 
 
+def _admin_emails():
+    return {
+        email.strip().lower()
+        for email in os.getenv('ADMIN_EMAILS', '').split(',')
+        if email.strip()
+    }
+
+
 def _hash_password(password: str, salt: bytes | None = None) -> str:
     salt = salt or secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, PBKDF2_ITERATIONS)
@@ -41,16 +49,41 @@ def init_auth_tables(cursor):
         token_hash CHAR(64) PRIMARY KEY, user_id INT NOT NULL,
         expires_at DATETIME NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_session_user (user_id), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)''')
+    user_columns = {
+        'profile_image': 'LONGTEXT NULL',
+        'deleted_at': 'DATETIME NULL',
+        'role': "VARCHAR(20) NOT NULL DEFAULT 'user'",
+        'status': "VARCHAR(20) NOT NULL DEFAULT 'active'",
+    }
+    for column_name, definition in user_columns.items():
+        cursor.execute(
+            """SELECT COUNT(*) AS column_count FROM information_schema.COLUMNS
+               WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME=%s""",
+            (column_name,),
+        )
+        if cursor.fetchone()['column_count'] == 0:
+            cursor.execute(f'ALTER TABLE users ADD COLUMN {column_name} {definition}')
 
 
 def public_user(row):
-    return {'id': row['id'], 'email': row['email'], 'nickname': row['nickname'], 'gender_verified': bool(row['gender_verified'])}
+    role = row.get('role') or 'user'
+    if row['email'].lower().strip() in _admin_emails():
+        role = 'admin'
+    return {
+        'id': row['id'],
+        'email': row['email'],
+        'nickname': row['nickname'],
+        'profile_image': row.get('profile_image'),
+        'role': role,
+        'status': row.get('status') or 'active',
+        'gender_verified': bool(row['gender_verified']),
+    }
 
 
 def signup_user(email, password, nickname):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute('SELECT id FROM users WHERE email=%s', (email.lower().strip(),))
+            cursor.execute('SELECT id FROM users WHERE email=%s AND deleted_at IS NULL', (email.lower().strip(),))
             if cursor.fetchone():
                 raise HTTPException(409, detail='이미 가입된 이메일입니다.')
             cursor.execute('INSERT INTO users (email,password_hash,nickname) VALUES (%s,%s,%s)', (email.lower().strip(), _hash_password(password), nickname.strip()))
@@ -62,7 +95,7 @@ def signup_user(email, password, nickname):
 def login_user(email, password):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute('SELECT * FROM users WHERE email=%s', (email.lower().strip(),))
+            cursor.execute('SELECT * FROM users WHERE email=%s AND deleted_at IS NULL', (email.lower().strip(),))
             row = cursor.fetchone()
             if not row or not _verify_password(password, row['password_hash']):
                 raise HTTPException(401, detail='이메일 또는 비밀번호가 올바르지 않습니다.')
@@ -84,7 +117,7 @@ def require_user(authorization: str | None = Header(default=None)):
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute('''SELECT u.* FROM auth_session s JOIN users u ON u.id=s.user_id
-                WHERE s.token_hash=%s AND s.expires_at>UTC_TIMESTAMP()''', (hashlib.sha256(token.encode()).hexdigest(),))
+                WHERE s.token_hash=%s AND s.expires_at>UTC_TIMESTAMP() AND u.deleted_at IS NULL''', (hashlib.sha256(token.encode()).hexdigest(),))
             row = cursor.fetchone()
             if not row:
                 raise HTTPException(401, detail='세션이 만료되었습니다.')
@@ -97,12 +130,58 @@ def require_verified_user(user=Depends(require_user)):
     return user
 
 
+def require_admin(user=Depends(require_verified_user)):
+    if user.get('role') != 'admin':
+        raise HTTPException(403, detail='관리자만 접근할 수 있습니다.')
+    return user
+
+
 def verify_gender(user_id, test_code):
     if not hmac.compare_digest(test_code.strip(), GENDER_TEST_CODE):
         raise HTTPException(400, detail='인증 코드가 올바르지 않습니다.')
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute('UPDATE users SET gender_verified=TRUE WHERE id=%s', (user_id,))
+
+
+def update_user_profile(user_id, nickname=None, profile_image=None):
+    fields, values = [], []
+    if nickname is not None:
+        fields.append('nickname=%s')
+        values.append(nickname.strip())
+    if profile_image is not None:
+        if profile_image and not profile_image.startswith('data:image/'):
+            raise HTTPException(400, detail='이미지 파일만 사용할 수 있습니다.')
+        if profile_image and len(profile_image) > 2_000_000:
+            raise HTTPException(400, detail='프로필 이미지는 1.5MB 이하로 줄여 주세요.')
+        fields.append('profile_image=%s')
+        values.append(profile_image or None)
+    if not fields:
+        raise HTTPException(400, detail='변경할 내용이 없습니다.')
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            values.append(user_id)
+            cursor.execute(f"UPDATE users SET {','.join(fields)} WHERE id=%s AND deleted_at IS NULL", values)
+            cursor.execute('SELECT * FROM users WHERE id=%s', (user_id,))
+            return public_user(cursor.fetchone())
+
+
+def delete_user_account(user_id):
+    deleted_email = f'deleted_user_{user_id}_{secrets.token_hex(8)}@deleted.local'
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute('DELETE FROM auth_session WHERE user_id=%s', (user_id,))
+            cursor.execute('DELETE FROM review_like WHERE user_id=%s', (user_id,))
+            cursor.execute('DELETE FROM review_report WHERE user_id=%s', (user_id,))
+            cursor.execute('UPDATE review SET user_id=NULL WHERE user_id=%s', (user_id,))
+            cursor.execute(
+                """UPDATE users
+                   SET email=%s, password_hash='', nickname='탈퇴한 사용자',
+                       profile_image=NULL, gender_verified=FALSE, deleted_at=UTC_TIMESTAMP()
+                   WHERE id=%s""",
+                (deleted_email, user_id),
+            )
 
 
 def logout_token(authorization):

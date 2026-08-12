@@ -159,6 +159,10 @@ def init_tables():
                 "report_status": "VARCHAR(30) NOT NULL DEFAULT 'normal'",
                 "updated_at": "DATETIME NULL",
                 "deleted_at": "DATETIME NULL",
+                "moderation_status": "VARCHAR(30) NOT NULL DEFAULT 'normal'",
+                "moderated_by": "INT NULL",
+                "moderated_at": "DATETIME NULL",
+                "moderation_reason": "TEXT NULL",
             }
             for column_name, definition in review_columns.items():
                 cursor.execute(
@@ -179,8 +183,27 @@ def init_tables():
                 PRIMARY KEY (review_id,user_id))""")
             cursor.execute("""CREATE TABLE IF NOT EXISTS review_report (
                 review_id INT NOT NULL, user_id INT NOT NULL,
+                reason VARCHAR(100) NULL, detail TEXT NULL,
+                status VARCHAR(30) NOT NULL DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NULL,
                 PRIMARY KEY (review_id,user_id))""")
+            report_columns = {
+                "reason": "VARCHAR(100) NULL",
+                "detail": "TEXT NULL",
+                "status": "VARCHAR(30) NOT NULL DEFAULT 'pending'",
+                "updated_at": "DATETIME NULL",
+                "reviewed_by": "INT NULL",
+                "reviewed_at": "DATETIME NULL",
+            }
+            for column_name, definition in report_columns.items():
+                cursor.execute(
+                    """SELECT COUNT(*) AS column_count FROM information_schema.COLUMNS
+                       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='review_report' AND COLUMN_NAME=%s""",
+                    (column_name,),
+                )
+                if cursor.fetchone()["column_count"] == 0:
+                    cursor.execute(f"ALTER TABLE review_report ADD COLUMN {column_name} {definition}")
             cursor.execute(
                 """
                 SELECT COUNT(*) AS column_count
@@ -323,7 +346,7 @@ def get_reviews(sort="latest"):
     order = "like_count DESC, created_at DESC" if sort == "helpful" else "created_at DESC"
     sql = f"""SELECT id,content,zone_id,lat,lng,user_score,ai_score,user_id,
         like_count,report_count,report_status,created_at,updated_at
-        FROM review WHERE deleted_at IS NULL ORDER BY {order}"""
+        FROM review WHERE deleted_at IS NULL AND moderation_status <> 'hidden' ORDER BY {order}"""
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(sql)
@@ -338,6 +361,127 @@ def get_reviews(sort="latest"):
                 for row in rows:
                     row["photos"] = photos.get(row["id"], [])
             return rows
+
+
+def attach_review_photos(cursor, rows):
+    if not rows:
+        return rows
+
+    ids = [row["id"] for row in rows]
+    placeholders = ",".join(["%s"] * len(ids))
+    cursor.execute(
+        f"SELECT review_id,photo_data,photo_name FROM review_photo WHERE review_id IN ({placeholders}) ORDER BY sort_order",
+        ids,
+    )
+    photos = {}
+    for photo in cursor.fetchall():
+        photos.setdefault(photo["review_id"], []).append(
+            {"photo_data": photo["photo_data"], "photo_name": photo["photo_name"]}
+        )
+    for row in rows:
+        row["photos"] = photos.get(row["id"], [])
+    return rows
+
+
+def get_user_activity(user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT COUNT(*) AS review_count,
+                          COALESCE(SUM(like_count), 0) AS received_like_count,
+                          COALESCE(SUM(report_count), 0) AS received_report_count
+                   FROM review
+                   WHERE user_id=%s AND deleted_at IS NULL""",
+                (user_id,),
+            )
+            review_summary = cursor.fetchone()
+            cursor.execute("SELECT COUNT(*) AS liked_review_count FROM review_like WHERE user_id=%s", (user_id,))
+            liked_summary = cursor.fetchone()
+            cursor.execute("SELECT COUNT(*) AS filed_report_count FROM review_report WHERE user_id=%s", (user_id,))
+            filed_summary = cursor.fetchone()
+
+            cursor.execute(
+                """SELECT id,content,zone_id,lat,lng,user_score,ai_score,user_id,
+                          like_count,report_count,report_status,created_at,updated_at
+                   FROM review
+                   WHERE user_id=%s AND deleted_at IS NULL
+                   ORDER BY created_at DESC
+                   LIMIT 5""",
+                (user_id,),
+            )
+            recent_reviews = attach_review_photos(cursor, cursor.fetchall())
+
+    return {
+        "summary": {
+            "review_count": int(review_summary["review_count"] or 0),
+            "received_like_count": int(review_summary["received_like_count"] or 0),
+            "received_report_count": int(review_summary["received_report_count"] or 0),
+            "liked_review_count": int(liked_summary["liked_review_count"] or 0),
+            "filed_report_count": int(filed_summary["filed_report_count"] or 0),
+        },
+        "recent_reviews": recent_reviews,
+    }
+
+
+def get_user_reviews(user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT id,content,zone_id,lat,lng,user_score,ai_score,user_id,
+                          like_count,report_count,report_status,created_at,updated_at
+                   FROM review
+                   WHERE user_id=%s AND deleted_at IS NULL
+                   ORDER BY created_at DESC""",
+                (user_id,),
+            )
+            return attach_review_photos(cursor, cursor.fetchall())
+
+
+def get_user_liked_reviews(user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT r.id,r.content,r.zone_id,r.lat,r.lng,r.user_score,r.ai_score,r.user_id,
+                          r.like_count,r.report_count,r.report_status,r.created_at,r.updated_at,
+                          rl.created_at AS liked_at
+                   FROM review_like rl
+                   JOIN review r ON r.id=rl.review_id
+                   WHERE rl.user_id=%s AND r.deleted_at IS NULL
+                   ORDER BY rl.created_at DESC""",
+                (user_id,),
+            )
+            return attach_review_photos(cursor, cursor.fetchall())
+
+
+def get_user_report_history(user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT rr.review_id,rr.reason,rr.detail,rr.status,rr.created_at AS reported_at,
+                          r.content,r.user_score,r.ai_score,r.report_count,r.report_status,
+                          COALESCE(rr.status, CASE WHEN r.report_status='under_review' THEN 'pending' ELSE 'completed' END) AS status
+                   FROM review_report rr
+                   JOIN review r ON r.id=rr.review_id
+                   WHERE rr.user_id=%s
+                   ORDER BY rr.created_at DESC""",
+                (user_id,),
+            )
+            filed_reports = cursor.fetchall()
+
+            cursor.execute(
+                """SELECT id AS review_id,content,user_score,ai_score,report_count,report_status,
+                          CASE WHEN report_status='under_review' THEN 'pending' ELSE 'completed' END AS status
+                   FROM review
+                   WHERE user_id=%s AND deleted_at IS NULL AND report_count > 0
+                   ORDER BY report_count DESC, created_at DESC""",
+                (user_id,),
+            )
+            received_reports = cursor.fetchall()
+
+    return {
+        "filed_reports": filed_reports,
+        "received_reports": received_reports,
+    }
 
 
 def update_review(review_id, review, user_id, ai_score=None):
@@ -386,18 +530,187 @@ def like_review(review_id, user_id):
             return cursor.fetchone()["like_count"]
 
 
-def report_review(review_id, user_id):
+def report_review(review_id, user_id, reason, detail=None):
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("SELECT id FROM review WHERE id=%s AND deleted_at IS NULL", (review_id,))
             if not cursor.fetchone():
                 raise LookupError("리뷰를 찾을 수 없습니다.")
-            cursor.execute("INSERT IGNORE INTO review_report (review_id,user_id) VALUES (%s,%s)", (review_id,user_id))
+            cursor.execute(
+                """INSERT INTO review_report (review_id,user_id,reason,detail,status)
+                   VALUES (%s,%s,%s,%s,'pending')
+                   ON DUPLICATE KEY UPDATE
+                       reason=VALUES(reason),
+                       detail=VALUES(detail),
+                       status='pending',
+                       updated_at=UTC_TIMESTAMP()""",
+                (review_id, user_id, reason, detail),
+            )
             if cursor.rowcount:
-                cursor.execute("""UPDATE review SET report_count=report_count+1,
-                    report_status=IF(report_count+1>=3,'under_review','normal') WHERE id=%s""", (review_id,))
+                cursor.execute(
+                    "SELECT COUNT(*) AS report_count FROM review_report WHERE review_id=%s",
+                    (review_id,),
+                )
+                report_count = cursor.fetchone()["report_count"]
+                cursor.execute(
+                    "SELECT COUNT(*) AS pending_count FROM review_report WHERE review_id=%s AND status='pending'",
+                    (review_id,),
+                )
+                pending_count = cursor.fetchone()["pending_count"]
+                cursor.execute(
+                    """UPDATE review SET report_count=%s,
+                       report_status=CASE
+                           WHEN %s>=3 THEN 'under_review'
+                           WHEN %s>0 THEN 'reported'
+                           ELSE 'normal'
+                       END
+                       WHERE id=%s""",
+                    (report_count, pending_count, pending_count, review_id),
+                )
             cursor.execute("SELECT report_count,report_status FROM review WHERE id=%s", (review_id,))
-            return cursor.fetchone()
+            result = cursor.fetchone()
+            result["reason"] = reason
+            result["detail"] = detail
+            return result
+
+
+def get_admin_reported_reviews(status="pending"):
+    status_filter = ""
+    params = []
+    if status in {"pending", "resolved", "rejected"}:
+        status_filter = "WHERE rr.status=%s"
+        params.append(status)
+
+    sql = f"""
+    SELECT
+        rr.review_id,
+        rr.user_id AS reporter_user_id,
+        reporter.email AS reporter_email,
+        reporter.nickname AS reporter_nickname,
+        rr.reason,
+        rr.detail,
+        rr.status AS report_status,
+        rr.created_at AS reported_at,
+        rr.reviewed_at,
+        reviewer.nickname AS reviewer_nickname,
+        r.content,
+        r.zone_id,
+        r.lat,
+        r.lng,
+        r.user_score,
+        r.ai_score,
+        r.report_count,
+        r.moderation_status,
+        r.created_at AS review_created_at,
+        author.email AS author_email,
+        author.nickname AS author_nickname
+    FROM review_report rr
+    JOIN review r ON r.id=rr.review_id
+    LEFT JOIN users reporter ON reporter.id=rr.user_id
+    LEFT JOIN users author ON author.id=r.user_id
+    LEFT JOIN users reviewer ON reviewer.id=rr.reviewed_by
+    {status_filter}
+    ORDER BY rr.created_at DESC
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            if not rows:
+                return rows
+
+            review_ids = list({row["review_id"] for row in rows})
+            placeholders = ",".join(["%s"] * len(review_ids))
+            cursor.execute(
+                f"""SELECT review_id,photo_data,photo_name
+                    FROM review_photo
+                    WHERE review_id IN ({placeholders})
+                    ORDER BY sort_order""",
+                review_ids,
+            )
+            photos = {}
+            for photo in cursor.fetchall():
+                photos.setdefault(photo["review_id"], []).append(
+                    {
+                        "photo_data": photo["photo_data"],
+                        "photo_name": photo["photo_name"],
+                    }
+                )
+
+            for row in rows:
+                row["photos"] = photos.get(row["review_id"], [])
+            return rows
+
+
+def update_report_status(review_id, reporter_user_id, status, admin_user_id):
+    if status not in {"pending", "resolved", "rejected"}:
+        raise ValueError("Invalid report status")
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE review_report
+                   SET status=%s, reviewed_by=%s, reviewed_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP()
+                   WHERE review_id=%s AND user_id=%s""",
+                (status, admin_user_id, review_id, reporter_user_id),
+            )
+            if cursor.rowcount == 0:
+                raise LookupError("Report not found")
+            cursor.execute(
+                "SELECT COUNT(*) AS pending_count FROM review_report WHERE review_id=%s AND status='pending'",
+                (review_id,),
+            )
+            pending_count = cursor.fetchone()["pending_count"]
+            cursor.execute(
+                """UPDATE review
+                   SET report_status=CASE
+                       WHEN %s>=3 THEN 'under_review'
+                       WHEN %s>0 THEN 'reported'
+                       ELSE 'normal'
+                   END
+                   WHERE id=%s AND moderation_status <> 'hidden'""",
+                (pending_count, pending_count, review_id),
+            )
+
+
+def hide_review_by_admin(review_id, admin_user_id, reason=None):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE review
+                   SET moderation_status='hidden',
+                       deleted_at=COALESCE(deleted_at, UTC_TIMESTAMP()),
+                       moderated_by=%s,
+                       moderated_at=UTC_TIMESTAMP(),
+                       moderation_reason=%s
+                   WHERE id=%s""",
+                (admin_user_id, reason, review_id),
+            )
+            if cursor.rowcount == 0:
+                raise LookupError("Review not found")
+            cursor.execute(
+                """UPDATE review_report
+                   SET status='resolved', reviewed_by=%s, reviewed_at=UTC_TIMESTAMP(), updated_at=UTC_TIMESTAMP()
+                   WHERE review_id=%s AND status='pending'""",
+                (admin_user_id, review_id),
+            )
+
+
+def restore_review_by_admin(review_id, admin_user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE review
+                   SET moderation_status='normal',
+                       deleted_at=NULL,
+                       moderated_by=%s,
+                       moderated_at=UTC_TIMESTAMP(),
+                       moderation_reason=NULL
+                   WHERE id=%s""",
+                (admin_user_id, review_id),
+            )
+            if cursor.rowcount == 0:
+                raise LookupError("Review not found")
 
 
 def upsert_public_safety_zone(zone):

@@ -16,6 +16,15 @@ class GenderVerificationRequest(BaseModel):
     test_code: str = Field(min_length=1, max_length=100)
 
 
+class ProfileUpdateRequest(BaseModel):
+    nickname: str | None = Field(default=None, min_length=1, max_length=50)
+    profile_image: str | None = None
+
+
+class AccountDeleteRequest(BaseModel):
+    confirm: bool
+
+
 class ReviewPhotoInput(BaseModel):
     photo_data: str = Field(min_length=1)
     photo_name: str | None = Field(default=None, max_length=255)
@@ -35,6 +44,19 @@ class ReviewUpdate(BaseModel):
     content: str | None = Field(default=None, min_length=1, max_length=2000)
     user_score: int | None = Field(default=None, ge=0, le=5)
     photos: list[ReviewPhotoInput] | None = Field(default=None, max_length=5)
+
+
+class ReviewReportRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=100)
+    detail: str | None = Field(default=None, max_length=1000)
+
+
+class AdminReportStatusRequest(BaseModel):
+    status: str = Field(pattern="^(pending|resolved|rejected)$")
+
+
+class AdminReviewModerationRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=1000)
 
 
 class PublicSafetyZoneCreate(BaseModel):
