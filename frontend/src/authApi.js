@@ -22,4 +22,17 @@ export const signup = payload => request('/auth/signup', json('POST', payload));
 export const login = payload => request('/auth/login', json('POST', payload));
 export const getMe = () => request('/auth/me');
 export const verifyGender = test_code => request('/auth/verify-gender', json('POST', {test_code}));
+export const updateProfile = payload => request('/me/profile', json('PATCH', payload));
+export const getMyActivity = () => request('/me/activity');
+export const getMyReviews = () => request('/me/reviews');
+export const getMyLikedReviews = () => request('/me/liked-reviews');
+export const getMyReports = () => request('/me/reports');
+export const deleteAccount = () => request('/me/account', json('DELETE', { confirm: true }));
+export const getAdminReports = status => request(`/admin/reports?status=${encodeURIComponent(status || 'pending')}`);
+export const updateAdminReportStatus = (reviewId, reporterUserId, status) =>
+  request(`/admin/reports/${reviewId}/${reporterUserId}`, json('PATCH', { status }));
+export const hideAdminReview = (reviewId, reason) =>
+  request(`/admin/reviews/${reviewId}/hide`, json('PATCH', { reason }));
+export const restoreAdminReview = reviewId =>
+  request(`/admin/reviews/${reviewId}/restore`, { method: 'PATCH' });
 export async function logout() { try { await request('/auth/logout', {method:'POST'}); } finally { clearToken(); } }

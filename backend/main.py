@@ -16,6 +16,11 @@ from db import (
     calculate_safety_score,
     calculate_zone_id,
     delete_review,
+    get_admin_reported_reviews,
+    get_user_activity,
+    get_user_liked_reviews,
+    get_user_report_history,
+    get_user_reviews,
     get_map_zones,
     get_public_safety_zone,
     get_public_safety_zones,
@@ -24,11 +29,14 @@ from db import (
     like_review,
     report_review,
     save_review,
+    hide_review_by_admin,
+    restore_review_by_admin,
+    update_report_status,
     update_review,
     upsert_public_safety_zone,
 )
-from auth import login_user, logout_token, require_user, require_verified_user, signup_user, verify_gender
-from schemas import GenderVerificationRequest, LoginRequest, PublicSafetyZoneCreate, ReviewCreate, ReviewUpdate, RouteSafetyRequest, SignupRequest
+from auth import delete_user_account, login_user, logout_token, require_admin, require_user, require_verified_user, signup_user, update_user_profile, verify_gender
+from schemas import AccountDeleteRequest, AdminReportStatusRequest, AdminReviewModerationRequest, GenderVerificationRequest, LoginRequest, ProfileUpdateRequest, PublicSafetyZoneCreate, ReviewCreate, ReviewReportRequest, ReviewUpdate, RouteSafetyRequest, SignupRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -121,6 +129,82 @@ def gender_verification(payload: GenderVerificationRequest, user=Depends(require
 def logout(authorization: str | None = Header(default=None)):
     logout_token(authorization)
     return {"message": "logged out"}
+
+
+@app.patch("/me/profile")
+def update_profile(payload: ProfileUpdateRequest, user=Depends(require_user)):
+    return {"user": update_user_profile(user["id"], payload.nickname, payload.profile_image)}
+
+
+@app.get("/me/activity")
+def read_my_activity(user=Depends(require_verified_user)):
+    return get_user_activity(user["id"])
+
+
+@app.get("/me/reviews")
+def read_my_reviews(user=Depends(require_verified_user)):
+    return {"reviews": get_user_reviews(user["id"])}
+
+
+@app.get("/me/liked-reviews")
+def read_my_liked_reviews(user=Depends(require_verified_user)):
+    return {"reviews": get_user_liked_reviews(user["id"])}
+
+
+@app.get("/me/reports")
+def read_my_reports(user=Depends(require_verified_user)):
+    return get_user_report_history(user["id"])
+
+
+@app.delete("/me/account")
+def delete_my_account(payload: AccountDeleteRequest, user=Depends(require_user)):
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="탈퇴 확인이 필요합니다.")
+    delete_user_account(user["id"])
+    return {"message": "deleted"}
+
+
+@app.get("/admin/reports")
+def read_admin_reports(status: str = "pending", _admin=Depends(require_admin)):
+    return {"reports": get_admin_reported_reviews(status)}
+
+
+@app.patch("/admin/reports/{review_id}/{reporter_user_id}")
+def moderate_report(
+    review_id: int,
+    reporter_user_id: int,
+    payload: AdminReportStatusRequest,
+    admin=Depends(require_admin),
+):
+    try:
+        update_report_status(review_id, reporter_user_id, payload.status, admin["id"])
+        return {"message": "updated"}
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.patch("/admin/reviews/{review_id}/hide")
+def hide_admin_review(
+    review_id: int,
+    payload: AdminReviewModerationRequest,
+    admin=Depends(require_admin),
+):
+    try:
+        hide_review_by_admin(review_id, admin["id"], payload.reason)
+        return {"message": "hidden"}
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.patch("/admin/reviews/{review_id}/restore")
+def restore_admin_review(review_id: int, admin=Depends(require_admin)):
+    try:
+        restore_review_by_admin(review_id, admin["id"])
+        return {"message": "restored"}
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 def clamp_ai_score(score):
@@ -370,9 +454,9 @@ def like(review_id: int, user=Depends(require_verified_user)):
 
 
 @app.post("/reviews/{review_id}/report")
-def report(review_id: int, user=Depends(require_verified_user)):
+def report(review_id: int, payload: ReviewReportRequest, user=Depends(require_verified_user)):
     try:
-        return report_review(review_id, user["id"])
+        return report_review(review_id, user["id"], payload.reason, payload.detail)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

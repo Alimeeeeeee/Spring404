@@ -66,5 +66,5 @@ export default function App() {
   if (mode === 'loading') return <main className="auth-page">불러오는 중…</main>;
   if (mode === 'login' || mode === 'signup') return <AuthCard mode={mode} setMode={setMode} onAuthenticated={route} />;
   if (mode === 'verify') return <Verify user={user} onDone={route} onLogout={handleLogout} />;
-  return <SafetyMap user={user} onLogout={handleLogout} />;
+  return <SafetyMap user={user} onUserChange={setUser} onLogout={handleLogout} />;
 }
