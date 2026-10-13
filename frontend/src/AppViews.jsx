@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import FacilityInventory from './FacilityInventory';
 
 import {
   center,
@@ -752,29 +753,7 @@ export function BottomSheet({
             </div>
           </div>
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 8,
-              color: '#374151',
-              fontSize: 13,
-              fontWeight: 800,
-            }}
-          >
-            <div style={{ padding: 10, borderRadius: 12, backgroundColor: '#f9fafb' }}>
-              CCTV {Number(selectedZone.cctv_count || 0)}
-            </div>
-            <div style={{ padding: 10, borderRadius: 12, backgroundColor: '#f9fafb' }}>
-              가로등 {Number(selectedZone.lamp_count || 0)}
-            </div>
-            <div style={{ padding: 10, borderRadius: 12, backgroundColor: '#f9fafb' }}>
-              편의점 {Number(selectedZone.convenience_count || 0)}
-            </div>
-            <div style={{ padding: 10, borderRadius: 12, backgroundColor: '#f9fafb' }}>
-              경찰시설 {Number(selectedZone.police_count || 0)}
-            </div>
-          </div>
+          <FacilityInventory inventory={selectedZone.facility_inventory} />
         </>
       ) : !selectedPlace ? (
         <div style={{ textAlign: 'center' }}>

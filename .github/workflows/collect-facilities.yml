@@ -1,0 +1,50 @@
+name: Collect safety facilities
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Tuesday 03:17 Asia/Seoul. Avoid the top-of-hour queue.
+    - cron: '17 18 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: facility-collection
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    # Enable after configuring credentials and the security-light source.
+    if: vars.FACILITY_COLLECTION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      DB_SSL: 'true'
+      DATA_GO_KR_SERVICE_KEY: ${{ secrets.DATA_GO_KR_SERVICE_KEY }}
+      KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+      STREETLIGHT_CSV_URL: ${{ vars.STREETLIGHT_CSV_URL }}
+      STREETLIGHT_DATA_DATE: ${{ vars.STREETLIGHT_DATA_DATE }}
+      SECURITY_LIGHT_CSV_URL: ${{ vars.SECURITY_LIGHT_CSV_URL }}
+      SECURITY_LIGHT_DATA_DATE: ${{ vars.SECURITY_LIGHT_DATA_DATE }}
+      HONGDAE_CENTER_LAT: ${{ vars.HONGDAE_CENTER_LAT || '37.5572' }}
+      HONGDAE_CENTER_LNG: ${{ vars.HONGDAE_CENTER_LNG || '126.9245' }}
+      GRID_RADIUS_KM: ${{ vars.GRID_RADIUS_KM || '1.0' }}
+      GRID_LAT_SIZE: ${{ vars.GRID_LAT_SIZE || '0.0009' }}
+      GRID_LNG_SIZE: ${{ vars.GRID_LNG_SIZE || '0.0011' }}
+      POLICE_COLLECTION_RADIUS_M: ${{ vars.POLICE_COLLECTION_RADIUS_M || '2000' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python collect_facilities.py --once

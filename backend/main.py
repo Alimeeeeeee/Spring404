@@ -37,6 +37,7 @@ from db import (
 from auth import delete_user_account, login_user, logout_token, require_admin, require_user, require_verified_user, signup_user, update_user_profile, verify_gender
 from schemas import AccountDeleteRequest, AdminReviewCheckedRequest, GenderVerificationRequest, LoginRequest, ProfileUpdateRequest, PublicSafetyZoneCreate, ReviewCreate, ReviewReportRequest, ReviewUpdate, RouteSafetyRequest, SignupRequest
 from review_analysis import build_analysis
+from facility_store import FacilityStore, attach_facility_inventory
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -494,10 +495,19 @@ def read_public_safety_zone(zone_id: int):
 @app.get("/map/zones")
 def read_map_zones():
     try:
-        return get_map_zones()
+        return attach_facility_inventory(get_map_zones())
     except Exception as e:
         logger.exception("Failed to read map zones: %s", e)
         raise HTTPException(status_code=500, detail="Failed to read map zones")
+
+
+@app.get("/facilities/zones")
+def read_facility_zones():
+    try:
+        return FacilityStore().inventory()
+    except Exception:
+        logger.exception("Failed to read facility inventory")
+        raise HTTPException(status_code=500, detail="시설 수집 현황을 불러오지 못했습니다.")
 
 
 @app.get("/safety-score/{zone_id}")
