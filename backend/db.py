@@ -173,6 +173,8 @@ def init_tables():
             cursor.execute(safety_zone_sql)
             cursor.execute(review_sql)
             cursor.execute(public_safety_zone_sql)
+            from facility_store import init_facility_tables
+            init_facility_tables(cursor)
             from auth import init_auth_tables
             init_auth_tables(cursor)
             review_columns = {
