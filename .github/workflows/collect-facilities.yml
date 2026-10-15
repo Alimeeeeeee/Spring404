@@ -28,7 +28,7 @@ jobs:
       - name: Convert public facility addresses (no DB writes)
         env:
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
-        run: python backend/geocode_security_lights.py --input backend/data/mapo-security-lights-20251209.csv --output-dir geocode-output --limit 30
+        run: python backend/geocode_security_lights.py --input backend/data/mapo-security-lights-20251209.csv --output-dir geocode-output
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -43,5 +43,6 @@ jobs:
             echo '### Security light address conversion' >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
             cat geocode-output/summary.json >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
