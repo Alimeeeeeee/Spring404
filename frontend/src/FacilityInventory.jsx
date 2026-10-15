@@ -39,7 +39,8 @@ export default function FacilityInventory({ inventory }) {
       <ul style={{ paddingLeft: 18, lineHeight: 1.7 }}>
         {Object.entries(labels).map(([source, label]) => {
           const state = sources[source] || {};
-          return <li key={source}>{label}: {statusLabels[state.status] || '미수집'}
+          return <li key={source}>{label}: {state.has_data && state.partial ? '일부 수집' : (statusLabels[state.status] || '미수집')}
+            {state.estimated_coordinates && ' · 주소 기반 추정 위치'}
             {state.has_data && ` · 최근 수집 ${dateText(state.last_success)}`}
             {state.stale && ' · 이전 자료 표시 중'}
             {state.data_dates?.length > 0 && ` · 원본 기준 ${state.data_dates.join(', ')}`}
