@@ -11,9 +11,9 @@ from facility_store import FacilityStore, utcnow
 logger = logging.getLogger(__name__)
 
 
-def run_collection(store, providers, due=False, interval_days=7):
+def run_collection(store, providers, due=False, interval_days=7, sources=SOURCES):
     states, outcomes = store.state(), {}
-    for source in SOURCES:
+    for source in sources:
         now, state = utcnow(), states.get(source,{})
         if due:
             success, attempt = state.get("last_success"), state.get("last_attempt")
@@ -48,19 +48,28 @@ def main():
     modes.add_argument("--once",action="store_true",help="모든 수집원을 즉시 갱신")
     modes.add_argument("--due",action="store_true",help="갱신 시기가 된 수집원만 실행")
     modes.add_argument("--loop",action="store_true",help="1시간마다 갱신 시기를 확인")
+    parser.add_argument("--sources", nargs="+", choices=SOURCES, default=list(SOURCES))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    from db import init_tables
-    init_tables()
+    from db import get_connection
+    from facility_store import init_facility_tables
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            init_facility_tables(cursor)
     store = FacilityStore()
     interval = float(os.getenv("FACILITY_REFRESH_DAYS","7"))
     if not 0 < interval <= 365:
         raise ValueError("FACILITY_REFRESH_DAYS must be between 0 and 365")
     with make_session() as session:
         while True:
-            outcomes = run_collection(store,collectors(session,store.area),due=args.due or args.loop,interval_days=interval)
+            outcomes = run_collection(store,collectors(session,store.area),due=args.due or args.loop,
+                                      interval_days=interval,sources=args.sources)
             print(json.dumps(outcomes,ensure_ascii=False),flush=True)
             if not args.loop:
+                inventory = store.inventory()
+                print(json.dumps({"stored_sources": inventory["sources"],
+                                  "zones_with_security_lights": sum(bool(z["security_light_count"]) for z in inventory["zones"])},
+                                 ensure_ascii=False,default=str),flush=True)
                 return 1 if any(o["status"] in {"failed","not_configured"} for o in outcomes.values()) else 0
             time.sleep(3600)
 

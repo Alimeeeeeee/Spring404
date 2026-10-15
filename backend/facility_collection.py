@@ -179,8 +179,11 @@ def parse_light_csv(raw, kind, data_date=None):
         if not any(row.values()):
             continue
         get = lambda key: row.get(columns[key]) if columns[key] else None
+        metadata = {key: row[key] for key in
+                    ("coordinate_accuracy", "coordinate_source", "coverage", "source_rows", "unresolved_rows")
+                    if row.get(key)}
         result.append(facility(kind, get("lat"), get("lng"), get("name"), get("address"),
-                               get("id"), get("date") or data_date))
+                               get("id"), get("date") or data_date, metadata))
     if not result:
         raise CollectionError("조명 원본 파일이 비어 있습니다. 기존 자료를 유지합니다.")
     return result
@@ -204,7 +207,7 @@ def collect_lights(session, area, kind, env=os.environ):
                       data={"infId": "OA-22205", "seq": "1", "infSeq": "1"}).content
         date = "2023-12-21"
     else:
-        raise NotConfigured("마포·서대문구 보안등 원본 CSV의 URL 또는 파일 경로가 필요합니다.")
+        raw = (Path(__file__).parent / "data" / "mapo-security-lights-geocoded.csv").read_bytes()
     selected = in_area(parse_light_csv(raw, kind, date), area)
     if not selected:
         raise CollectionError("조명 원본에 대상 지역 지점이 없습니다. 지역 포함 범위를 확인한 CSV가 필요합니다.")
