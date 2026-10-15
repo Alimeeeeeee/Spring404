@@ -49,7 +49,11 @@ def test_light_csv_korean_encoding_and_schema():
     assert rows[0]['data_date'] == '2023-12-21'
     for raw in (b'<html>error</html>',b'lat,lng\n',b'lat,lng\nnan,126\n'):
         with pytest.raises(CollectionError): parse_light_csv(raw,'security_light')
-    with pytest.raises(NotConfigured): collect_lights(Session([]),AREA,'security_light',{})
+    bundled = collect_lights(Session([]),AREA,'security_light',{})
+    assert len(bundled) == 1816
+    assert len({item['external_id'] for item in bundled}) == 1816
+    assert all(item['metadata']['coverage'] == 'partial' for item in bundled)
+    assert all(item['metadata']['coordinate_accuracy'] == 'address_representative_not_lamp_location' for item in bundled)
     # A populated source with no target-area rows is unverified coverage, not zero lights.
     other=b'lat,lng\n37.1,127.1\n'
     with pytest.raises(CollectionError):
@@ -226,3 +230,17 @@ def test_engine_does_not_log_or_store_raw_exception_with_credentials(store):
     result=run_collection(store,{s:broken for s in SOURCES})
     assert 'SECRET' not in str(result)
     assert 'SECRET' not in str(store.state())
+
+
+def test_partial_geocoded_snapshot_round_trip_and_source_isolation(store):
+    rows = collect_lights(Session([]),AREA,'security_light',{})
+    store.save('convenience',[point()],'success',utcnow())
+    result = run_collection(store,{'security_light':lambda:rows},sources=['security_light'])
+    assert result == {'security_light':{'status':'success','count':1816}}
+    inventory = store.inventory()
+    assert inventory['sources']['security_light']['partial']
+    assert inventory['sources']['security_light']['estimated_coordinates']
+    assert inventory['sources']['convenience']['item_count'] == 1
+    assert sum(z['security_light_count'] or 0 for z in inventory['zones']) == 1816
+    assert all(not z['collection_complete'] and z['lamp_count'] is None for z in inventory['zones'])
+    assert store.raw.execute('SELECT public_safety_score FROM public_safety_zone').fetchone()[0] == 3.5

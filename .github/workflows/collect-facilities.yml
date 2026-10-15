@@ -2,6 +2,17 @@ name: Collect safety facilities
 
 on:
   workflow_dispatch:
+    inputs:
+      source:
+        description: '수집할 시설 (보안등만 저장하려면 security_light)'
+        type: choice
+        default: security_light
+        options:
+          - security_light
+          - cctv
+          - convenience
+          - police
+          - all
   schedule:
     # Tuesday 03:17 Asia/Seoul. Avoid the top-of-hour queue.
     - cron: '17 18 * * 1'
@@ -16,7 +27,7 @@ concurrency:
 jobs:
   collect:
     # Enable after configuring credentials and the security-light source.
-    if: vars.FACILITY_COLLECTION_ENABLED == 'true'
+    if: github.event_name == 'workflow_dispatch' || vars.FACILITY_COLLECTION_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -24,7 +35,7 @@ jobs:
         working-directory: backend
     env:
       DB_HOST: ${{ secrets.DB_HOST }}
-      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_PORT: ${{ secrets.DB_PORT || '4000' }}
       DB_USER: ${{ secrets.DB_USER }}
       DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
       DB_NAME: ${{ secrets.DB_NAME }}
@@ -47,4 +58,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: python collect_facilities.py --once
+      - name: Collect selected source
+        env:
+          SELECTED_SOURCE: ${{ inputs.source || 'all' }}
+        run: |
+          if [ "$SELECTED_SOURCE" = 'all' ]; then
+            python collect_facilities.py --once
+          else
+            python collect_facilities.py --once --sources "$SELECTED_SOURCE"
+          fi

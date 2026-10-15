@@ -96,7 +96,11 @@ def build_inventory(area, zones, states, items):
         success = state.get("last_success")
         status = state.get("status", "uncollected")
         stale = bool(success and (status != "success" or (now-success).total_seconds() > 8*86400))
+        metadata = [json.loads(item.get("metadata_json") or "{}") for item in items if item["source"] == source]
+        partial = any(m.get("coverage") == "partial" for m in metadata)
+        estimated = any(m.get("coordinate_accuracy") == "address_representative_not_lamp_location" for m in metadata)
         sources[source] = {"label":LABELS[source],"status":status,"has_data":bool(success),
+                           "partial":partial,"estimated_coordinates":estimated,
                            "stale":stale,"last_attempt":state.get("last_attempt"),"last_success":success,
                            "item_count":state.get("item_count"),"error":state.get("error_message"),
                            "data_dates":sorted({item["data_date"] for item in items
@@ -125,7 +129,7 @@ def build_inventory(area, zones, states, items):
         # Exact-location duplicates across datasets count once; close but distinct poles stay distinct.
         light_sites = {(round(item["lat"],7),round(item["lng"],7)) for item in lights}
         lamp_known = len(light_sites) if in_scope and any(sources[s]["has_data"] for s in ("streetlight","security_light")) else None
-        lamp_complete = in_scope and all(sources[s]["has_data"] for s in ("streetlight","security_light"))
+        lamp_complete = in_scope and all(sources[s]["has_data"] and not sources[s]["partial"] for s in ("streetlight","security_light"))
         nearest = min(police,key=lambda p: distance_m(center_lat,center_lng,p["lat"],p["lng"])) if in_scope and police else None
         result.append({"zone_id":zone["zone_id"],"in_collection_area":in_scope,"boundary_zone":boundary,
                        "cctv_count":counts["cctv"],"streetlight_count":counts["streetlight"],
@@ -133,7 +137,7 @@ def build_inventory(area, zones, states, items):
                        "lamp_known_count":lamp_known,"convenience_count":counts["convenience"],"police_count":counts["police"],
                        "nearest_police_distance_m":round(distance_m(center_lat,center_lng,nearest["lat"],nearest["lng"]),1) if nearest else None,
                        "nearest_police_name":nearest["name"] if nearest else None,
-                       "collection_complete":in_scope and all(s["has_data"] and not s["stale"] for s in sources.values()),
+                       "collection_complete":in_scope and all(s["has_data"] and not s["stale"] and not s["partial"] for s in sources.values()),
                        "score_status":"pending_criteria"})
     return {"area":{**area.__dict__,"distance_type":"straight_line"},"sources":sources,"zones":result,
             "score_status":"pending_criteria","coverage_note":"공개된 시설 목록 기준이며 실제 모든 시설을 보장하지 않습니다."}
