@@ -91,7 +91,17 @@ class Geocoder:
             response = self.local.session.get(API, params={'query': query, 'analyze_type': 'exact', 'size': 30},
                                               headers={'Authorization': 'KakaoAK '+self.key}, timeout=(10, 30))
             if response.status_code in {401, 403}:
-                raise ProviderError('카카오 인증 실패: REST API 키와 로컬 API 사용 설정을 확인해 주세요.')
+                try:
+                    message=str(response.json().get('message','')).lower()
+                except (ValueError, AttributeError):
+                    message=''
+                if 'disabled' in message or 'open_map' in message or 'not enabled' in message:
+                    reason='카카오맵/로컬 API 사용 설정을 활성화해 주세요.'
+                elif 'ip' in message and any(word in message for word in ('allow','block','mismatch')):
+                    reason='카카오 앱의 허용 IP 설정을 확인해 주세요.'
+                else:
+                    reason='GitHub Secret에 해당 앱의 REST API 키가 등록됐는지 확인해 주세요.'
+                raise ProviderError(f'카카오 인증 실패 HTTP {response.status_code}: {reason}')
             if response.status_code == 429:
                 raise ProviderError('카카오 요청 한도에 도달했습니다. 캐시를 보존하고 중단합니다.')
             response.raise_for_status()
@@ -187,6 +197,7 @@ def main():
     parser.add_argument('--limit',type=int,default=0)
     args=parser.parse_args()
     key=os.getenv('KAKAO_REST_API_KEY','').strip()
+    if key.startswith('KakaoAK '): key=key[len('KakaoAK '):].strip()
     if not key:
         print('KAKAO_REST_API_KEY가 설정되지 않았습니다.',flush=True)
         return 2
