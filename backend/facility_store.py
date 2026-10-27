@@ -101,6 +101,7 @@ def build_inventory(area, zones, states, items):
         estimated = any(m.get("coordinate_accuracy") == "address_representative_not_lamp_location" for m in metadata)
         sources[source] = {"label":LABELS[source],"status":status,"has_data":bool(success),
                            "partial":partial,"estimated_coordinates":estimated,
+                           "invalid_coordinate_rows":max((int(m.get("invalid_coordinate_rows",0)) for m in metadata),default=0),
                            "stale":stale,"last_attempt":state.get("last_attempt"),"last_success":success,
                            "item_count":state.get("item_count"),"error":state.get("error_message"),
                            "data_dates":sorted({item["data_date"] for item in items

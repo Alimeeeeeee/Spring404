@@ -112,7 +112,7 @@ def collect_cctv(session, area, env=os.environ):
     key = env.get("DATA_GO_KR_SERVICE_KEY", "").strip()
     if not key:
         raise NotConfigured("공공데이터포털 CCTV 인증키가 설정되지 않았습니다.")
-    all_items, received, expected = [], 0, None
+    all_items, received, expected, invalid_coordinates = [], 0, None, 0
     # Seoul-wide query includes nearby Seodaemun-gu as well as Mapo-gu.
     for page in range(1, 2001):
         body = response_json(request(session, "GET", "https://apis.data.go.kr/1741000/cctv_info/info", params={
@@ -143,14 +143,26 @@ def collect_cctv(session, area, env=os.environ):
                 raise CollectionError("CCTV 설치목적 필드가 없습니다. 원본 형식을 확인해 주세요.")
             if not any(word in (row.get("INSTL_PRPS_SE_NM") or "") for word in ("방범", "생활방범", "범죄")):
                 continue
-            item = facility("cctv", row.get("WGS84_LAT"), row.get("WGS84_LOT"),
-                            row.get("MNG_INST_NM"), row.get("LCTN_ROAD_NM_ADDR") or row.get("LCTN_LOTNO_ADDR"),
-                            [row.get("OPN_ATMY_GRP_CD"), row.get("MNG_NO")] if row.get("MNG_NO") else "",
-                            row.get("DAT_CRTR_YMD"), {"purpose": row.get("INSTL_PRPS_SE_NM"),
-                                                      "camera_count": row.get("CAM_CNTOM")})
+            try:
+                item = facility("cctv", row.get("WGS84_LAT"), row.get("WGS84_LOT"),
+                                row.get("MNG_INST_NM"), row.get("LCTN_ROAD_NM_ADDR") or row.get("LCTN_LOTNO_ADDR"),
+                                [row.get("OPN_ATMY_GRP_CD"), row.get("MNG_NO")] if row.get("MNG_NO") else "",
+                                row.get("DAT_CRTR_YMD"), {"purpose": row.get("INSTL_PRPS_SE_NM"),
+                                                          "camera_count": row.get("CAM_CNTOM")})
+            except CollectionError:
+                invalid_coordinates += 1
+                continue
             all_items.append(item)
+        if page == 1 or page % 100 == 0:
+            print(f'CCTV pages: {page}; rows: {received}/{expected}; invalid coordinates: {invalid_coordinates}', flush=True)
         if received == expected:
-            return in_area(all_items, area)
+            selected = in_area(all_items, area)
+            if not selected and invalid_coordinates:
+                raise CollectionError("CCTV 좌표 오류로 대상 지역 포함 여부를 확인할 수 없습니다. 기존 자료를 유지합니다.")
+            for item in selected:
+                item['metadata'].update(upstream_rows=expected, invalid_coordinate_rows=invalid_coordinates,
+                                        coverage='partial' if invalid_coordinates else 'published_list')
+            return selected
         if received > expected:
             raise CollectionError("CCTV 페이지 건수가 일치하지 않습니다.")
     raise CollectionError("CCTV 수집 페이지 한도를 초과했습니다.")
