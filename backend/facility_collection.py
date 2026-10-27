@@ -95,8 +95,10 @@ def request(session, method, url, **kwargs):
         response = session.request(method, url, timeout=(10, 30), **kwargs)
         response.raise_for_status()
         return response
-    except requests.RequestException:
-        raise CollectionError("외부 데이터 요청에 실패했습니다. 인증키·쿼터·연결을 확인해 주세요.") from None
+    except requests.RequestException as error:
+        status = getattr(getattr(error, 'response', None), 'status_code', None)
+        code = f" HTTP {status}" if isinstance(status, int) else ""
+        raise CollectionError(f"외부 데이터 요청 실패{code}. 해당 API 활용승인·인증키·쿼터·연결을 확인해 주세요.") from None
 
 
 def response_json(response):
@@ -107,7 +109,7 @@ def response_json(response):
 
 
 def collect_cctv(session, area, env=os.environ):
-    key = env.get("DATA_GO_KR_SERVICE_KEY", "")
+    key = env.get("DATA_GO_KR_SERVICE_KEY", "").strip()
     if not key:
         raise NotConfigured("공공데이터포털 CCTV 인증키가 설정되지 않았습니다.")
     all_items, received, expected = [], 0, None
@@ -203,9 +205,18 @@ def collect_lights(session, area, kind, env=os.environ):
             raise CollectionError("조명 다운로드 URL은 HTTPS여야 합니다.")
         raw = request(session, "GET", url).content
     elif kind == "streetlight":
-        raw = request(session, "POST", "https://datafile.seoul.go.kr/bigfile/iot/inf/nio_download.do?useCache=false",
-                      data={"infId": "OA-22205", "seq": "1", "infSeq": "1"}).content
-        date = "2023-12-21"
+        source = Path(__file__).parent / "data" / "streetlights-input.csv"
+        if not source.exists():
+            raise NotConfigured("홍대 주변 가로등 원본 등록 대기: backend/data/streetlights-input.csv")
+        raw = source.read_bytes()
+        for encoding in ('utf-8-sig', 'cp949'):
+            try:
+                text = raw.decode(encoding)
+                if not list(csv.DictReader(io.StringIO(text))):
+                    raise NotConfigured("홍대 주변 가로등 원본 등록 대기: 현재 파일에는 열 제목만 있습니다.")
+                break
+            except UnicodeDecodeError:
+                continue
     else:
         raise NotConfigured("보안등 원본 파일은 update_security_lights.py로 변환·갱신해 주세요. 기존 자료를 유지합니다.")
     selected = in_area(parse_light_csv(raw, kind, date), area)
@@ -221,7 +232,7 @@ def split_bounds(bounds):
 
 
 def collect_kakao(session, area, kind, env=os.environ):
-    key = env.get("KAKAO_REST_API_KEY")
+    key = (env.get('KAKAO_REST_API_KEY') or '').strip().removeprefix('KakaoAK ').strip()
     if not key:
         raise NotConfigured("카카오 REST API 키가 설정되지 않았습니다.")
     headers = {"Authorization": "KakaoAK " + key}
