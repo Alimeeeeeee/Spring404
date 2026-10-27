@@ -5,20 +5,16 @@ on:
     branches: [main]
     paths:
       - 'backend/data/security-lights-input.csv'
+      - 'backend/data/streetlights-input.csv'
   workflow_dispatch:
     inputs:
       source:
-        description: '수집할 시설 (보안등만 저장하려면 security_light)'
+        description: '수집할 시설 (all: 전체, files: 조명 파일만)'
         type: choice
-        default: security_light
-        options:
-          - security_light
-          - cctv
-          - convenience
-          - police
-          - all
+        default: all
+        options: [all, files, security_light, streetlight, cctv, convenience, police]
   schedule:
-    # Tuesday 03:17 Asia/Seoul. Avoid the top-of-hour queue.
+    # Every Tuesday at 03:17 Asia/Seoul.
     - cron: '17 18 * * 1'
 
 permissions:
@@ -30,8 +26,7 @@ concurrency:
 
 jobs:
   collect:
-    # Enable after configuring credentials and the security-light source.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || vars.FACILITY_COLLECTION_ENABLED == 'true'
+    if: github.event_name != 'schedule' || vars.FACILITY_COLLECTION_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -48,8 +43,6 @@ jobs:
       KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
       STREETLIGHT_CSV_URL: ${{ vars.STREETLIGHT_CSV_URL }}
       STREETLIGHT_DATA_DATE: ${{ vars.STREETLIGHT_DATA_DATE }}
-      SECURITY_LIGHT_CSV_URL: ${{ vars.SECURITY_LIGHT_CSV_URL }}
-      SECURITY_LIGHT_DATA_DATE: ${{ vars.SECURITY_LIGHT_DATA_DATE }}
       HONGDAE_CENTER_LAT: ${{ vars.HONGDAE_CENTER_LAT || '37.5572' }}
       HONGDAE_CENTER_LNG: ${{ vars.HONGDAE_CENTER_LNG || '126.9245' }}
       GRID_RADIUS_KM: ${{ vars.GRID_RADIUS_KM || '1.0' }}
@@ -62,33 +55,24 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - name: Convert uploaded light file and update DB
-        if: github.event_name == 'push' || inputs.source == 'security_light' || inputs.source == 'all' || github.event_name == 'schedule'
-        run: python update_security_lights.py --output-dir security-light-output
-      - name: Collect selected source
-        if: github.event_name != 'push' && inputs.source != 'security_light'
+      - name: Collect and verify facilities
         env:
-          SELECTED_SOURCE: ${{ inputs.source || 'all' }}
-        run: |
-          if [ "$SELECTED_SOURCE" = 'all' ]; then
-            python collect_facilities.py --once --sources cctv streetlight convenience police
-          else
-            python collect_facilities.py --once --sources "$SELECTED_SOURCE"
-          fi
-      - name: Upload light conversion results
+          SELECTED_SOURCE: ${{ github.event_name == 'push' && 'files' || inputs.source || 'all' }}
+        run: python run_facility_automation.py --source "$SELECTED_SOURCE" --output-dir facility-output
+      - name: Upload collection results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: security-light-update-results
-          path: backend/security-light-output/
+          name: facility-collection-results
+          path: backend/facility-output/
           retention-days: 30
-          if-no-files-found: ignore
-      - name: Light update summary
+          if-no-files-found: warn
+      - name: Collection summary
         if: always()
         run: |
-          if [ -f security-light-output/summary.json ]; then
-            echo '### 보안등 파일 갱신 결과' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f facility-output/summary.json ]; then
+            echo '### 안전 시설 수집 결과' >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
-            cat security-light-output/summary.json >> "$GITHUB_STEP_SUMMARY"
+            cat facility-output/summary.json >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
